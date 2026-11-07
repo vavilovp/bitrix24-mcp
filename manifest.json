@@ -165,7 +165,7 @@
     "webhook_url": {
       "type": "string",
       "title": "Адрес входящего вебхука",
-      "description": "Например https://box.2-a.ru/rest/32/xxxxxxxx/",
+      "description": "Например https://portal.example.ru/rest/1/xxxxxxxx/",
       "sensitive": true,
       "required": true
     },
