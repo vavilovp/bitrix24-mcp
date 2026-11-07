@@ -17,6 +17,8 @@ const calls = [];
 const recent = [
   { id: "chat900", chat_id: 900, type: "chat", title: "Закреплённый старый", pinned: true, message: { date: "2019-05-01T10:00:00+03:00" } },
   { id: "chat554", chat_id: 554, type: "chat", title: "Свежий", message: { date: "2026-11-06T09:00:00+03:00" } },
+  // A colleague without a dialog yet: chat_id 0, its own (old) date, mixed into the list.
+  { id: 8, chat_id: 0, type: "user", title: "Новый сотрудник", message: { id: 0, date: "2018-01-01T10:00:00+03:00" }, options: { default_user_record: true } },
   { id: "chat555", chat_id: 555, type: "chat", title: "Отчёты", message: { date: "2026-11-02T12:04:43+03:00" } },
   { id: 7, chat_id: 557, type: "user", title: "Коллега", message: { date: "2026-10-20T10:00:00+03:00" } },
   { id: "chat556", chat_id: 556, type: "chat", title: "Старый чат", message: { date: "2020-01-01T10:00:00+03:00" } },
@@ -97,7 +99,7 @@ test("call_summaries pages through all chats active since date_from", async () =
   calls.length = 0;
   const r = await callTool("call_summaries", { query: "отход партий", date_from: "2026-10-01" });
   assert.equal(r.total_found, 1);
-  assert.equal(r.chats_scanned, 3, "pinned old chat and chats older than date_from are skipped; 1:1 dialog included");
+  assert.equal(r.chats_scanned, 3, "pinned old chat, entries without a chat and chats older than date_from are skipped; 1:1 dialog included");
   assert.equal(r.oldest_chat_activity, "2026-10-20T10:00:00+03:00");
   assert.equal(r.notes, undefined);
   const [o] = r.items;
@@ -112,7 +114,7 @@ test("call_summaries pages through all chats active since date_from", async () =
   assert.equal(o.analysis, undefined);
 
   const pages = calls.filter((c) => c.method === "im.recent.list").map((c) => c.params.OFFSET);
-  assert.deepEqual(pages, [0, 2, 4], "stops paging once the list goes older than date_from");
+  assert.deepEqual(pages, [0, 2, 4], "an old entry without a chat does not stop paging; the first old real chat does");
   const search = calls.filter((c) => c.method === "im.dialog.messages.search");
   assert.ok(search.every((c) => c.via === "batch"), "searches go through batch");
   assert.deepEqual(search.map((c) => c.params.CHAT_ID).sort(), ["554", "555", "557"]);

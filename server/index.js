@@ -13,7 +13,7 @@ import { Bitrix, BitrixError } from "./bitrix.js";
 import { extractOffice } from "./office.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
-const VERSION = "1.1.1";
+const VERSION = "1.1.2";
 // Unfilled placeholders from the extension manifest arrive as literal "${...}" — treat them as empty.
 const env = (k) => { const v = (process.env[k] || "").trim(); return v.startsWith("${") ? "" : v; };
 const READ_ONLY = /^(1|true|yes|y)$/i.test(env("BITRIX_READ_ONLY"));
@@ -634,12 +634,14 @@ async function recentChatsSince(c, fromTime, maxChats, counter) {
     const items = r?.items || [];
     let reachedOld = false;
     for (const x of items) {
+      // Entries with chat_id 0 are colleagues without a dialog yet ("default_user_record"); the list
+      // mixes them in with their own dates, so they must not decide where the recent chats end.
+      if (!x.chat_id) continue;
       const t = Date.parse(x.message?.date || x.date_update || "");
       if (!isNaN(t) && !isNaN(fromTime) && t < fromTime) {
         if (!x.pinned) reachedOld = true; // pinned chats are listed first regardless of date
         continue;
       }
-      if (!x.chat_id) continue;
       if (chats.length >= maxChats) { truncated = true; break; }
       chats.push({ ref: x.id, chat_id: Number(x.chat_id), title: x.title || x.chat?.name });
       if (!isNaN(t)) oldest = x.message?.date || x.date_update;
