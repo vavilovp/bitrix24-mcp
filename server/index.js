@@ -13,7 +13,7 @@ import { Bitrix, BitrixError } from "./bitrix.js";
 import { extractOffice } from "./office.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
-const VERSION = "1.1.0";
+const VERSION = "1.1.1";
 // Unfilled placeholders from the extension manifest arrive as literal "${...}" — treat them as empty.
 const env = (k) => { const v = (process.env[k] || "").trim(); return v.startsWith("${") ? "" : v; };
 const READ_ONLY = /^(1|true|yes|y)$/i.test(env("BITRIX_READ_ONLY"));
@@ -601,11 +601,13 @@ const OVERVIEW_MARKER = "BitrixGPT";
 
 async function resolveChatId(c, ref) {
   const s = String(ref).trim();
-  let m;
-  if ((m = s.match(/^chat(\d+)$/i))) return { chat_id: Number(m[1]) };
-  if (/^\d+$/.test(s)) return { chat_id: Number(s) };
-  const info = await c.result("im.dialog.get", { DIALOG_ID: s }); // e.g. 'sg12'
-  return { chat_id: Number(info?.id), title: info?.name };
+  const m = s.match(/^(?:chat)?(\d+)$/i);
+  // 'chat123' and bare numbers are chat IDs; anything else ('sg12') is a DIALOG_ID to resolve.
+  const info = await c.result("im.dialog.get", { DIALOG_ID: m ? `chat${m[1]}` : s }).catch((e) => {
+    if (m) return null; // the title is optional when we already know the chat ID
+    throw e;
+  });
+  return { chat_id: m ? Number(m[1]) : Number(info?.id), title: info?.name || undefined };
 }
 
 async function mapLimit(items, n, fn) {
@@ -617,67 +619,122 @@ async function mapLimit(items, n, fn) {
   return out;
 }
 
+/**
+ * Chats (group and 1:1, no open lines) with activity since fromTime, newest first.
+ * Pages through im.recent.list until the list goes older than fromTime or maxChats is reached.
+ */
+async function recentChatsSince(c, fromTime, maxChats, counter) {
+  const chats = [];
+  let offset = 0;
+  let truncated = false;
+  let oldest;
+  for (let page = 0; page < 20; page++) {
+    counter.calls++;
+    const r = await c.result("im.recent.list", { SKIP_OPENLINES: "Y", LIMIT: 200, OFFSET: offset });
+    const items = r?.items || [];
+    let reachedOld = false;
+    for (const x of items) {
+      const t = Date.parse(x.message?.date || x.date_update || "");
+      if (!isNaN(t) && !isNaN(fromTime) && t < fromTime) {
+        if (!x.pinned) reachedOld = true; // pinned chats are listed first regardless of date
+        continue;
+      }
+      if (!x.chat_id) continue;
+      if (chats.length >= maxChats) { truncated = true; break; }
+      chats.push({ ref: x.id, chat_id: Number(x.chat_id), title: x.title || x.chat?.name });
+      if (!isNaN(t)) oldest = x.message?.date || x.date_update;
+    }
+    if (truncated || reachedOld || !(r?.hasMore ?? r?.hasMorePages) || !items.length) break;
+    offset += items.length;
+  }
+  return { chats, truncated, oldest };
+}
+
 tool(server, "call_summaries", {
   title: "BitrixGPT call summaries",
   description:
     "Find BitrixGPT call overviews (AI_OVERVIEW messages) and search inside them: decisions, tasks, title, participants, agenda. " +
-    "Without chat_ids scans recent chats active since date_from. Use this to answer 'what did we decide about X' — chat_search cannot see overview content.",
+    "Without chat_ids scans every chat (group and 1:1) active since date_from, up to max_chats; the response says if that limit cut the scan short. " +
+    "Use this to answer 'what did we decide about X' — chat_search cannot see overview content.",
   input: {
     query: z.string().optional().describe("Words that must all occur in the overview (case-insensitive substring, so 'отход' matches 'отходам'). Analysis/recommendations are not searched."),
     chat_ids: z.array(z.union([z.string(), z.number()])).optional()
-      .describe("Chats to scan: numeric chat_id (from chats_recent), 'chat123' or 'sg12'. For 1:1 dialogs pass their chat_id. Default: recent chats"),
+      .describe("Chats to scan: numeric chat_id (from chats_recent), 'chat123' or 'sg12'. For 1:1 dialogs pass their chat_id. Default: all chats active since date_from"),
     date_from: z.string().optional().describe("ISO date; default 30 days ago"),
     date_to: z.string().optional(),
     detail: overviewDetailParam,
-    max_chats: z.number().int().min(1).max(100).optional().describe("How many recent chats to scan when chat_ids is not given (default 40)"),
+    max_chats: z.number().int().min(1).max(2000).optional().describe("Upper bound on chats scanned when chat_ids is not given (default 500)"),
     limit: z.number().int().min(1).max(100).optional().describe("Max overviews to return (default 20, newest first)"),
   },
-}, async ({ query, chat_ids, date_from, date_to, detail = "brief", max_chats = 40, limit = 20 }) => {
+}, async ({ query, chat_ids, date_from, date_to, detail = "brief", max_chats = 500, limit = 20 }) => {
   const c = client();
   const from = date_from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
   const fromTime = Date.parse(from);
-  let calls = 0;
+  const counter = { calls: 0 };
+  const notes = [];
+  const errors = [];
 
   let chats;
+  let oldest;
   if (chat_ids?.length) {
     chats = await mapLimit(chat_ids, 4, async (ref) => {
-      try { calls++; return { ref, ...(await resolveChatId(c, ref)) }; } catch (e) { return { ref, error: e.message }; }
+      try { counter.calls++; return { ref, ...(await resolveChatId(c, ref)) }; } catch (e) { return { ref, error: e.message }; }
+    });
+    chats = chats.filter((ch) => {
+      if (ch.error || !ch.chat_id) { errors.push({ chat: ch.ref, error: ch.error || "chat not found" }); return false; }
+      return true;
     });
   } else {
-    calls++;
-    const recent = await c.result("im.recent.get", { SKIP_OPENLINES: "Y" });
-    // A chat can only hold an overview newer than date_from if its last message is newer too.
-    chats = (recent || [])
-      .filter((x) => x.chat_id && (!x.message?.date || isNaN(fromTime) || Date.parse(x.message.date) >= fromTime))
-      .slice(0, max_chats)
-      .map((x) => ({ ref: x.id, chat_id: Number(x.chat_id), title: x.title }));
+    const r = await recentChatsSince(c, fromTime, max_chats, counter);
+    chats = r.chats;
+    oldest = r.oldest;
+    if (r.truncated) {
+      notes.push(`Stopped at max_chats=${max_chats}: chats active between ${from} and ${oldest} were not scanned. ` +
+        "Raise max_chats, narrow date_from, or pass chat_ids.");
+    }
   }
 
-  const errors = [];
+  // One im.dialog.messages.search per chat, sent 50 at a time through `batch`.
   const found = [];
-  let possiblyMore = false;
-  await mapLimit(chats, 4, async (ch) => {
-    if (ch.error || !ch.chat_id) { errors.push({ chat: ch.ref, error: ch.error || "chat not found" }); return; }
+  const full = [];
+  const chunks = [];
+  for (let i = 0; i < chats.length; i += 50) chunks.push(chats.slice(i, i + 50));
+  await mapLimit(chunks, 2, async (chunk) => {
+    const cmds = {};
+    chunk.forEach((ch, i) => {
+      cmds[`c${i}`] = ["im.dialog.messages.search", { CHAT_ID: ch.chat_id, SEARCH_MESSAGE: OVERVIEW_MARKER, DATE_FROM: from, DATE_TO: date_to, LIMIT: 100 }];
+    });
+    counter.calls++;
+    let res;
     try {
-      calls++;
-      const r = await c.result("im.dialog.messages.search", clean({ CHAT_ID: ch.chat_id, SEARCH_MESSAGE: OVERVIEW_MARKER, DATE_FROM: from, DATE_TO: date_to, LIMIT: 100 }));
-      const msgs = r?.messages || [];
-      if (msgs.length >= 100) possiblyMore = true;
+      res = await c.batch(cmds);
+    } catch (e) {
+      for (const ch of chunk) errors.push({ chat: ch.ref, chat_id: ch.chat_id, error: e.message });
+      return;
+    }
+    chunk.forEach((ch, i) => {
+      const key = `c${i}`;
+      if (res.errors[key]) { errors.push({ chat: ch.ref, chat_id: ch.chat_id, error: res.errors[key] }); return; }
+      const msgs = res.results[key]?.messages || [];
+      if (msgs.length >= 100) full.push(ch.title || ch.chat_id);
       for (const m of msgs) {
         if (!isAiOverview(m) || !matchesQuery(overviewSearchText(m), query)) continue;
         found.push(clean({
           chat_id: ch.chat_id,
           chat_title: ch.title,
-          dialog_id: typeof ch.ref === "string" && /^chat\d+$/i.test(ch.ref) ? ch.ref : undefined,
+          dialog_id: `chat${ch.chat_id}`,
           message_id: m.id,
           date: m.date,
           ...parseOverview(m, { detail, origin: c.origin }),
         }));
       }
-    } catch (e) {
-      errors.push({ chat: ch.ref, chat_id: ch.chat_id, error: e.message });
-    }
+    });
   });
+  if (full.length) notes.push(`These chats returned 100 BitrixGPT messages, older ones may be missing — narrow date_from/date_to: ${full.join(", ")}`);
+  // Access errors are expected for chats the webhook user left; summarise them instead of listing each.
+  const accessErrors = errors.filter((e) => /ACCESS_ERROR/.test(e.error));
+  const otherErrors = errors.filter((e) => !/ACCESS_ERROR/.test(e.error));
+  if (accessErrors.length) notes.push(`${accessErrors.length} chat(s) skipped: no access.`);
 
   found.sort((a, b) => String(b.date).localeCompare(String(a.date)));
   return ok(clean({
@@ -685,9 +742,10 @@ tool(server, "call_summaries", {
     total_found: found.length,
     chats_scanned: chats.length,
     date_from: from,
-    api_calls: calls,
-    note: possiblyMore ? "Some chats returned 100 BitrixGPT messages — narrow date_from/date_to to be sure nothing was missed." : undefined,
-    errors: errors.length ? errors : undefined,
+    oldest_chat_activity: oldest,
+    api_calls: counter.calls,
+    notes: notes.length ? notes : undefined,
+    errors: otherErrors.length ? otherErrors : undefined,
   }));
 });
 

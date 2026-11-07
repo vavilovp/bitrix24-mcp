@@ -79,6 +79,32 @@ export class Bitrix {
     return (await this.call(method, params)).result;
   }
 
+  /**
+   * Run up to 50 calls in one request via the `batch` method.
+   * cmds: { key: [method, flatParams] }. Returns { results: {key: result}, errors: {key: "CODE: description"} }.
+   * A failing command does not fail the others.
+   */
+  async batch(cmds) {
+    const entries = Object.entries(cmds);
+    if (entries.length > 50) throw new Error("batch: at most 50 commands per call");
+    const cmd = {};
+    for (const [key, [method, params]] of entries) {
+      const qs = new URLSearchParams();
+      for (const [k, v] of Object.entries(params || {})) {
+        if (v === undefined || v === null || v === "") continue;
+        if (typeof v === "object") throw new Error(`batch: parameter ${k} of ${method} must be a scalar`);
+        qs.append(k, String(v));
+      }
+      cmd[key] = `${method}?${qs}`;
+    }
+    const r = (await this.call("batch", { halt: 0, cmd })).result || {};
+    const errors = {};
+    for (const [key, e] of Object.entries(r.result_error || {})) {
+      errors[key] = e?.error ? `${e.error}${e.error_description ? `: ${e.error_description}` : ""}` : String(e);
+    }
+    return { results: Array.isArray(r.result) ? {} : r.result || {}, errors };
+  }
+
   /** Resolve user IDs to "Name Surname" strings, with caching. */
   async userNames(ids) {
     const want = [...new Set(ids.map(String).filter((x) => x && x !== "0" && !this._userCache.has(x)))];
