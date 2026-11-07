@@ -1,0 +1,204 @@
+{
+  "manifest_version": "0.2",
+  "name": "bitrix24-box",
+  "display_name": "Bitrix24 (webhook)",
+  "version": "1.0.0",
+  "description": "Задачи, проекты, чаты, Диск, календарь и CRM Битрикс24 (коробка или облако) через входящий вебхук.",
+  "long_description": "MCP-сервер для Битрикс24 через входящий вебхук. Работает с коробочной версией. Задачи и комментарии (старая и новая карточка), чек-листы, учёт времени, рабочие группы и проекты, чтение чатов, Диск (просмотр, поиск, чтение и скачивание файлов), календарь (события, занятость, создание встреч), CRM (сделки, контакты, компании, лиды) и вызов любого REST-метода. Все действия выполняются от имени владельца вебхука в пределах его прав.",
+  "author": {
+    "name": "Pavel Vavilov"
+  },
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.js",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.js"
+      ],
+      "env": {
+        "BITRIX_WEBHOOK_URL": "${user_config.webhook_url}",
+        "BITRIX_READ_ONLY": "${user_config.read_only}",
+        "BITRIX_DOWNLOAD_DIR": "${user_config.download_dir}"
+      }
+    }
+  },
+  "tools": [
+    {
+      "name": "b24_whoami",
+      "description": "Show which user the webhook acts as, the portal address and the granted scopes"
+    },
+    {
+      "name": "b24_call",
+      "description": "Call any Bitrix24 REST method by exact name (e.g"
+    },
+    {
+      "name": "users_find",
+      "description": "Search portal users by name/email/position text, or list by department"
+    },
+    {
+      "name": "departments_list",
+      "description": "List departments (ID, name, parent, head)."
+    },
+    {
+      "name": "tasks_list",
+      "description": "List tasks with filters"
+    },
+    {
+      "name": "task_get",
+      "description": "Full task card: fields, description, checklist, latest comments (works with both the old card and the new task-chat card)."
+    },
+    {
+      "name": "task_comments",
+      "description": "Read task comments / task chat messages (newest first)"
+    },
+    {
+      "name": "task_create",
+      "description": "Create a task"
+    },
+    {
+      "name": "task_update",
+      "description": "Change task fields: e.g"
+    },
+    {
+      "name": "task_set_status",
+      "description": "Start, complete, defer, renew (reopen), pause, approve or disapprove (for tasks awaiting control)."
+    },
+    {
+      "name": "task_add_comment",
+      "description": "Post a comment to a task (into the task chat on the new card, or as a classic comment)"
+    },
+    {
+      "name": "task_checklist",
+      "description": "Add a checklist item, or mark an item done / not done."
+    },
+    {
+      "name": "task_time_list",
+      "description": "List time-tracking records of a task."
+    },
+    {
+      "name": "task_time_add",
+      "description": "Add a time-tracking record (seconds + comment) to a task."
+    },
+    {
+      "name": "task_history",
+      "description": "Who changed what in a task and when."
+    },
+    {
+      "name": "groups_list",
+      "description": "List workgroups / projects visible to the webhook user"
+    },
+    {
+      "name": "group_get",
+      "description": "Workgroup or project card with members and their roles (A owner, E moderator, K member)."
+    },
+    {
+      "name": "chats_recent",
+      "description": "List the webhook user's recent dialogs and group chats with last message and unread counter"
+    },
+    {
+      "name": "chat_messages",
+      "description": "Read messages from a chat or dialog (newest 20–50)"
+    },
+    {
+      "name": "chat_search",
+      "description": "Search messages in one chat by text and/or date range"
+    },
+    {
+      "name": "chat_info",
+      "description": "Chat title, type, owner, numeric chat_id and participants for a DIALOG_ID."
+    },
+    {
+      "name": "disk_storages",
+      "description": "List Drive storages: user drives, company drive (common), workgroup drives"
+    },
+    {
+      "name": "disk_list",
+      "description": "List files and folders in a Drive folder (folder_id) or a storage root (storage_id)."
+    },
+    {
+      "name": "disk_find",
+      "description": "Find files/folders by name inside a folder or storage, walking subfolders (breadth-first, limited depth)"
+    },
+    {
+      "name": "disk_file",
+      "description": "Get a Drive file: metadata, and content"
+    },
+    {
+      "name": "calendar_events",
+      "description": "List events in a period"
+    },
+    {
+      "name": "calendar_event_get",
+      "description": "Get one event by ID."
+    },
+    {
+      "name": "calendar_sections",
+      "description": "List calendars (sections) of a user, group or the company."
+    },
+    {
+      "name": "calendar_free_busy",
+      "description": "Busy intervals of several users in a period — use to find a meeting slot."
+    },
+    {
+      "name": "calendar_event_create",
+      "description": "Create an event or meeting"
+    },
+    {
+      "name": "calendar_event_update",
+      "description": "Change an event: pass fields in calendar.event.update format (name, from, to, description, location, attendees, …)"
+    },
+    {
+      "name": "crm_list",
+      "description": "List deals, contacts, companies or leads with a raw filter, e.g"
+    },
+    {
+      "name": "crm_get",
+      "description": "Get one deal / contact / company / lead with all fields; optionally its latest activities."
+    },
+    {
+      "name": "crm_save",
+      "description": "Create (no id) or update (with id) a deal / contact / company / lead"
+    }
+  ],
+  "user_config": {
+    "webhook_url": {
+      "type": "string",
+      "title": "Адрес входящего вебхука",
+      "description": "Например https://box.2-a.ru/rest/32/xxxxxxxx/",
+      "sensitive": true,
+      "required": true
+    },
+    "read_only": {
+      "type": "boolean",
+      "title": "Только чтение",
+      "description": "Запретить любые изменения в Битрикс24 (создание, редактирование, комментарии).",
+      "default": false,
+      "required": false
+    },
+    "download_dir": {
+      "type": "directory",
+      "title": "Папка для скачанных файлов",
+      "description": "Куда сохранять файлы с Диска (docx, xlsx, pdf и т.п.).",
+      "default": "${HOME}/Downloads",
+      "required": false
+    }
+  },
+  "keywords": [
+    "bitrix24",
+    "битрикс24",
+    "crm",
+    "tasks",
+    "calendar"
+  ],
+  "license": "MIT",
+  "compatibility": {
+    "platforms": [
+      "darwin",
+      "win32"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

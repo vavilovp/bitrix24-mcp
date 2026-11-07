@@ -1,0 +1,12 @@
+# Paths starting with "/" are relative to the project root only,
+# so that e.g. node_modules/*/dist/ is still bundled.
+/.git/
+/.gitignore
+/.mcpbignore
+/.claude/
+/dist/
+/*.mcpb
+/package-lock.json
+/README.md
+.DS_Store
+.env
