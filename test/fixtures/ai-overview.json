@@ -1,0 +1,40 @@
+{
+  "_comment": "Synthetic BitrixGPT call overview with the same structure as im.dialog.messages.search returns (names and content are made up).",
+  "id": 1000123,
+  "chat_id": 555,
+  "author_id": 0,
+  "date": "2026-11-02T12:04:43+03:00",
+  "text": "BitrixGPT проанализировал [URL=/online/?IM_DIALOG=chat555&IM_MESSAGE=1000100]звонок №77[/URL]",
+  "params": {
+    "ATTACH": [
+      {
+        "ID": 42,
+        "BLOCKS": [
+          { "MESSAGE": "[b]Планирование отчёта по отходам производства[/b]" },
+          { "MESSAGE": "Участники: [user=1]Иван Петров[/user], [user=2]Анна Смирнова[/user]" },
+          { "MESSAGE": "[br][b]BitrixGPT оценил эффективность звонка 67%[/b]" },
+          { "DELIMITER": { "SIZE": 400 } },
+          { "USER": [{ "NAME": "Повестка встречи", "AVATAR_TYPE": "USER", "AVATAR": "https://portal.example.ru/bitrix/js/call/images/copilot-message-agenda.svg" }] },
+          { "MESSAGE": "Обсудить структуру отчёта по отходам и сроки." },
+          { "DELIMITER": { "SIZE": 400 } },
+          { "USER": [{ "NAME": "Итоги", "AVATAR_TYPE": "USER", "AVATAR": "https://portal.example.ru/bitrix/js/call/images/copilot-message-areements.svg" }] },
+          { "MESSAGE": "[b]Что решили[/b]" },
+          { "MESSAGE": "1. Отчёт по отходам строить по данным [b]партий[/b], а не по регистрам." },
+          { "MESSAGE": "2. Сдать первую версию до пятницы." },
+          { "MESSAGE": "[b]Задачи[/b]" },
+          { "MESSAGE": "1. [user=2]Анна Смирнова[/user]: подготовить ТЗ и отправить [user=1]Иван Петров[/user]." },
+          { "DELIMITER": { "SIZE": 400 } },
+          { "USER": [{ "NAME": "Анализ и рекомендации", "AVATAR_TYPE": "USER", "AVATAR": "https://portal.example.ru/bitrix/js/call/images/copilot-message-insights.svg" }] },
+          { "MESSAGE": "[user=1]Иван Петров[/user] чётко расставляет приоритеты. Секретное слово: ламинатор.[br][br]" },
+          { "DELIMITER": { "SIZE": 1 } },
+          { "MESSAGE": "[br][url=/call/detail/77]Подробный анализ встречи[/url][br]" },
+          { "DELIMITER": { "SIZE": 400, "COLOR": "#00ace3" } },
+          { "MESSAGE": "[i]Ответы BitrixGPT могут быть [url=https://helpdesk.bitrix24.ru/open/code_20412666/]неточны[/url], проверяйте важную информацию[/i]" }
+        ],
+        "DESCRIPTION": "",
+        "COLOR": "#8d51eb"
+      }
+    ],
+    "COMPONENT_PARAMS": { "messageType": "AI_OVERVIEW", "callId": 77, "outcomeId": 5 }
+  }
+}

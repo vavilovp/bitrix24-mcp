@@ -8,6 +8,8 @@ MCP-сервер для Битрикс24 (коробка или облако) ч
 - `server/index.js` — регистрация MCP-инструментов.
 - `server/bitrix.js` — REST-клиент для вебхука (повторы при лимитах, кэш имён пользователей).
 - `server/office.js` — извлечение текста из docx / xlsx / pptx.
+- `server/attach.js` — очистка BB-кодов, разворачивание вложений сообщений (`params.ATTACH`) и разбор сводок звонков BitrixGPT (`AI_OVERVIEW`).
+- `test/` — тесты (`node:test`): разбор вложений и сквозные проверки сервера на локальной заглушке REST API.
 
 ## Команды
 
@@ -16,14 +18,14 @@ npm install
 ```
 
 ```bash
-npm run check
+npm test
 ```
 
 ```bash
 npm run pack
 ```
 
-`npm run pack` проверяет синтаксис и манифест и собирает `dist/bitrix24-box.mcpb`. Для запуска вручную:
+`npm run pack` проверяет синтаксис, прогоняет тесты, проверяет манифест и собирает `dist/bitrix24-box.mcpb`. Для запуска вручную:
 
 ```bash
 BITRIX_WEBHOOK_URL=https://<portal>/rest/<user_id>/<secret>/ npm start

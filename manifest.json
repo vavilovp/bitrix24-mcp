@@ -2,9 +2,9 @@
   "manifest_version": "0.2",
   "name": "bitrix24-box",
   "display_name": "Bitrix24 (webhook)",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Задачи, проекты, чаты, Диск, календарь и CRM Битрикс24 (коробка или облако) через входящий вебхук.",
-  "long_description": "MCP-сервер для Битрикс24 через входящий вебхук. Работает с коробочной версией. Задачи и комментарии (старая и новая карточка), чек-листы, учёт времени, рабочие группы и проекты, чтение чатов, Диск (просмотр, поиск, чтение и скачивание файлов), календарь (события, занятость, создание встреч), CRM (сделки, контакты, компании, лиды) и вызов любого REST-метода. Все действия выполняются от имени владельца вебхука в пределах его прав.",
+  "long_description": "MCP-сервер для Битрикс24 через входящий вебхук. Работает с коробочной версией. Задачи и комментарии (старая и новая карточка), чек-листы, учёт времени, рабочие группы и проекты, чтение чатов и поиск по сводкам звонков BitrixGPT, Диск (просмотр, поиск, чтение и скачивание файлов), календарь (события, занятость, создание встреч), CRM (сделки, контакты, компании, лиды) и вызов любого REST-метода. Все действия выполняются от имени владельца вебхука в пределах его прав.",
   "author": {
     "name": "Pavel Vavilov"
   },
@@ -98,15 +98,19 @@
     },
     {
       "name": "chat_messages",
-      "description": "Read messages from a chat or dialog (newest 20–50)"
+      "description": "Read messages from a chat or dialog (newest 20–50), with attachments and BitrixGPT call overviews expanded."
     },
     {
       "name": "chat_search",
-      "description": "Search messages in one chat by text and/or date range"
+      "description": "Search messages in one chat by text and/or date range."
     },
     {
       "name": "chat_info",
       "description": "Chat title, type, owner, numeric chat_id and participants for a DIALOG_ID."
+    },
+    {
+      "name": "call_summaries",
+      "description": "Find BitrixGPT call overviews and search their decisions, tasks and agenda across chats."
     },
     {
       "name": "disk_storages",

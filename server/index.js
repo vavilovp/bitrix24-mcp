@@ -11,8 +11,9 @@ import { homedir } from "node:os";
 import path from "node:path";
 import { Bitrix, BitrixError } from "./bitrix.js";
 import { extractOffice } from "./office.js";
+import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 // Unfilled placeholders from the extension manifest arrive as literal "${...}" — treat them as empty.
 const env = (k) => { const v = (process.env[k] || "").trim(); return v.startsWith("${") ? "" : v; };
 const READ_ONLY = /^(1|true|yes|y)$/i.test(env("BITRIX_READ_ONLY"));
@@ -80,7 +81,6 @@ const pick = (obj, keys) => {
   return o;
 };
 const clean = (o) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== ""));
-const stripBB = (s) => (typeof s === "string" ? s.replace(/\[(\/?)(b|i|u|s|url[^\]]*|user[^\]]*|quote|code|color[^\]]*|size[^\]]*|br|p|list|\*)\]/gi, "").trim() : s);
 
 const id = z.coerce.number().int().positive();
 const anyObj = z.record(z.string(), z.any());
@@ -501,21 +501,36 @@ tool(server, "group_get", {
 
 // ===== Chats (read) =====
 
-function compactMessages(r) {
+// Messages can carry content outside `text`: rich attachments (params.ATTACH) and
+// BitrixGPT call overviews (an ATTACH with COMPONENT_PARAMS.MESSAGE_TYPE = AI_OVERVIEW).
+// overview_detail: "brief" = title, participants, decisions, tasks; "full" adds agenda and analysis.
+function compactMessages(r, { overviewDetail = "brief" } = {}) {
   const users = {};
   for (const u of r?.users || []) users[u.id] = u.name;
   const files = {};
   for (const f of r?.files || []) files[f.id] = { name: f.name, size: f.size, disk_id: f.id };
-  const messages = (r?.messages || []).map((m) => { const aid = m.author_id ?? m.authorId; return clean({
-    id: m.id,
-    date: m.date,
-    author_id: aid || undefined,
-    author: aid ? users[aid] || `#${aid}` : "system",
-    text: stripBB(m.text),
-    files: m.params?.FILE_ID?.length ? m.params.FILE_ID.map((fid) => files[fid] || { disk_id: fid }) : undefined,
-  }); });
+  const origin = b24?.origin || "";
+  const messages = (r?.messages || []).map((m) => {
+    const aid = m.author_id ?? m.authorId;
+    const overview = isAiOverview(m) ? parseOverview(m, { detail: overviewDetail, origin }) : undefined;
+    const type = messageType(m);
+    return clean({
+      id: m.id,
+      date: m.date,
+      author_id: aid || undefined,
+      author: aid ? users[aid] || `#${aid}` : "system",
+      type: type && type !== "AI_OVERVIEW" ? type : undefined,
+      text: stripBB(m.text),
+      overview,
+      attach: !overview && m.params?.ATTACH ? attachText(m.params.ATTACH) || undefined : undefined,
+      files: m.params?.FILE_ID?.length ? m.params.FILE_ID.map((fid) => files[fid] || { disk_id: fid }) : undefined,
+    });
+  });
   return clean({ chat_id: r?.chat_id ?? r?.chatId, messages });
 }
+
+const overviewDetailParam = z.enum(["brief", "full"]).optional()
+  .describe("How much of BitrixGPT call overviews to include: brief (default) = title, participants, decisions, tasks; full = also agenda and analysis/recommendations");
 
 tool(server, "chats_recent", {
   title: "Recent chats",
@@ -545,31 +560,135 @@ tool(server, "chats_recent", {
 
 tool(server, "chat_messages", {
   title: "Read chat messages",
-  description: "Read messages from a chat or dialog (newest 20–50). Page back with before_id, forward with after_id.",
+  description:
+    "Read messages from a chat or dialog (newest 20–50). Page back with before_id, forward with after_id. " +
+    "Attachments are expanded into `attach`; BitrixGPT call overviews into `overview` (decisions, tasks).",
   input: {
     dialog_id: z.string().describe("'chat123', 'sg12' or a user ID for a 1:1 dialog"),
     limit: z.number().int().min(1).max(50).optional(),
     before_id: id.optional(),
     after_id: id.optional(),
+    overview_detail: overviewDetailParam,
   },
-}, async ({ dialog_id, limit = 30, before_id, after_id }) => {
+}, async ({ dialog_id, limit = 30, before_id, after_id, overview_detail }) => {
   const r = await client().result("im.dialog.messages.get", clean({ DIALOG_ID: dialog_id, LIMIT: limit, LAST_ID: before_id, FIRST_ID: after_id }));
-  return ok(compactMessages(r));
+  return ok(compactMessages(r, { overviewDetail: overview_detail }));
 });
 
 tool(server, "chat_search", {
   title: "Search in a chat",
-  description: "Search messages in one chat by text and/or date range. Needs the numeric CHAT_ID (from chats_recent chat_id, or 'chat123' → 123; for a 1:1 dialog use chat_info first).",
+  description:
+    "Search messages in one chat by text and/or date range. Needs the numeric CHAT_ID (from chats_recent chat_id, or 'chat123' → 123; for a 1:1 dialog use chat_info first). " +
+    "Bitrix searches message text only, not attachments — to search inside BitrixGPT call overviews use call_summaries.",
   input: {
     chat_id: id,
     query: z.string().optional(),
     date_from: z.string().optional(),
     date_to: z.string().optional(),
     limit: z.number().int().min(1).max(200).optional(),
+    overview_detail: overviewDetailParam,
   },
-}, async ({ chat_id, query, date_from, date_to, limit = 50 }) => {
+}, async ({ chat_id, query, date_from, date_to, limit = 50, overview_detail }) => {
   const r = await client().result("im.dialog.messages.search", clean({ CHAT_ID: chat_id, SEARCH_MESSAGE: query, DATE_FROM: date_from, DATE_TO: date_to, LIMIT: limit }));
-  return ok(compactMessages(r));
+  return ok(compactMessages(r, { overviewDetail: overview_detail }));
+});
+
+// BitrixGPT posts its call overview as a system message whose text starts with "BitrixGPT …"
+// (e.g. "BitrixGPT проанализировал звонок №1440") and whose content is in the attachment.
+// Bitrix full-text search covers the text only, so we find these messages by that word and
+// match the query against the expanded attachment ourselves.
+const OVERVIEW_MARKER = "BitrixGPT";
+
+async function resolveChatId(c, ref) {
+  const s = String(ref).trim();
+  let m;
+  if ((m = s.match(/^chat(\d+)$/i))) return { chat_id: Number(m[1]) };
+  if (/^\d+$/.test(s)) return { chat_id: Number(s) };
+  const info = await c.result("im.dialog.get", { DIALOG_ID: s }); // e.g. 'sg12'
+  return { chat_id: Number(info?.id), title: info?.name };
+}
+
+async function mapLimit(items, n, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    while (i < items.length) { const k = i++; out[k] = await fn(items[k], k); }
+  }));
+  return out;
+}
+
+tool(server, "call_summaries", {
+  title: "BitrixGPT call summaries",
+  description:
+    "Find BitrixGPT call overviews (AI_OVERVIEW messages) and search inside them: decisions, tasks, title, participants, agenda. " +
+    "Without chat_ids scans recent chats active since date_from. Use this to answer 'what did we decide about X' — chat_search cannot see overview content.",
+  input: {
+    query: z.string().optional().describe("Words that must all occur in the overview (case-insensitive substring, so 'отход' matches 'отходам'). Analysis/recommendations are not searched."),
+    chat_ids: z.array(z.union([z.string(), z.number()])).optional()
+      .describe("Chats to scan: numeric chat_id (from chats_recent), 'chat123' or 'sg12'. For 1:1 dialogs pass their chat_id. Default: recent chats"),
+    date_from: z.string().optional().describe("ISO date; default 30 days ago"),
+    date_to: z.string().optional(),
+    detail: overviewDetailParam,
+    max_chats: z.number().int().min(1).max(100).optional().describe("How many recent chats to scan when chat_ids is not given (default 40)"),
+    limit: z.number().int().min(1).max(100).optional().describe("Max overviews to return (default 20, newest first)"),
+  },
+}, async ({ query, chat_ids, date_from, date_to, detail = "brief", max_chats = 40, limit = 20 }) => {
+  const c = client();
+  const from = date_from || new Date(Date.now() - 30 * 864e5).toISOString().slice(0, 10);
+  const fromTime = Date.parse(from);
+  let calls = 0;
+
+  let chats;
+  if (chat_ids?.length) {
+    chats = await mapLimit(chat_ids, 4, async (ref) => {
+      try { calls++; return { ref, ...(await resolveChatId(c, ref)) }; } catch (e) { return { ref, error: e.message }; }
+    });
+  } else {
+    calls++;
+    const recent = await c.result("im.recent.get", { SKIP_OPENLINES: "Y" });
+    // A chat can only hold an overview newer than date_from if its last message is newer too.
+    chats = (recent || [])
+      .filter((x) => x.chat_id && (!x.message?.date || isNaN(fromTime) || Date.parse(x.message.date) >= fromTime))
+      .slice(0, max_chats)
+      .map((x) => ({ ref: x.id, chat_id: Number(x.chat_id), title: x.title }));
+  }
+
+  const errors = [];
+  const found = [];
+  let possiblyMore = false;
+  await mapLimit(chats, 4, async (ch) => {
+    if (ch.error || !ch.chat_id) { errors.push({ chat: ch.ref, error: ch.error || "chat not found" }); return; }
+    try {
+      calls++;
+      const r = await c.result("im.dialog.messages.search", clean({ CHAT_ID: ch.chat_id, SEARCH_MESSAGE: OVERVIEW_MARKER, DATE_FROM: from, DATE_TO: date_to, LIMIT: 100 }));
+      const msgs = r?.messages || [];
+      if (msgs.length >= 100) possiblyMore = true;
+      for (const m of msgs) {
+        if (!isAiOverview(m) || !matchesQuery(overviewSearchText(m), query)) continue;
+        found.push(clean({
+          chat_id: ch.chat_id,
+          chat_title: ch.title,
+          dialog_id: typeof ch.ref === "string" && /^chat\d+$/i.test(ch.ref) ? ch.ref : undefined,
+          message_id: m.id,
+          date: m.date,
+          ...parseOverview(m, { detail, origin: c.origin }),
+        }));
+      }
+    } catch (e) {
+      errors.push({ chat: ch.ref, chat_id: ch.chat_id, error: e.message });
+    }
+  });
+
+  found.sort((a, b) => String(b.date).localeCompare(String(a.date)));
+  return ok(clean({
+    items: found.slice(0, limit),
+    total_found: found.length,
+    chats_scanned: chats.length,
+    date_from: from,
+    api_calls: calls,
+    note: possiblyMore ? "Some chats returned 100 BitrixGPT messages — narrow date_from/date_to to be sure nothing was missed." : undefined,
+    errors: errors.length ? errors : undefined,
+  }));
 });
 
 tool(server, "chat_info", {

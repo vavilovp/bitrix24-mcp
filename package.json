@@ -1,6 +1,6 @@
 {
   "name": "bitrix24-mcp",
-  "version": "1.0.1",
+  "version": "1.1.0",
   "description": "Bitrix24 MCP server over incoming webhook",
   "main": "server/index.js",
   "keywords": [],
@@ -8,9 +8,10 @@
   "license": "ISC",
   "scripts": {
     "start": "node server/index.js",
-    "check": "node --check server/index.js && node --check server/bitrix.js && node --check server/office.js",
+    "check": "node --check server/index.js && node --check server/bitrix.js && node --check server/office.js && node --check server/attach.js",
+    "test": "node --test \"test/*.test.js\"",
     "validate": "npx -y @anthropic-ai/mcpb@2.1.2 validate manifest.json",
-    "pack": "npm run check && npm run validate && npm prune --omit=dev && npx -y @anthropic-ai/mcpb@2.1.2 pack . dist/bitrix24-box.mcpb"
+    "pack": "npm run check && npm test && npm run validate && npm prune --omit=dev && npx -y @anthropic-ai/mcpb@2.1.2 pack . dist/bitrix24-box.mcpb"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.2",
