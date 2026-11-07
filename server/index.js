@@ -12,7 +12,7 @@ import path from "node:path";
 import { Bitrix, BitrixError } from "./bitrix.js";
 import { extractOffice } from "./office.js";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 // Unfilled placeholders from the extension manifest arrive as literal "${...}" — treat them as empty.
 const env = (k) => { const v = (process.env[k] || "").trim(); return v.startsWith("${") ? "" : v; };
 const READ_ONLY = /^(1|true|yes|y)$/i.test(env("BITRIX_READ_ONLY"));
@@ -45,7 +45,9 @@ function fail(e) {
   return { content: [{ type: "text", text: msg }], isError: true };
 }
 
-function tool(server, name, { title, description, input = {}, write = false, destructive = false }, handler) {
+// `write` blocks the tool entirely in read-only mode. `readOnly` only sets the
+// readOnlyHint annotation; override it for tools that gate writes themselves (b24_call).
+function tool(server, name, { title, description, input = {}, write = false, readOnly = !write, destructive = false }, handler) {
   server.registerTool(
     name,
     {
@@ -54,7 +56,7 @@ function tool(server, name, { title, description, input = {}, write = false, des
       inputSchema: input,
       annotations: {
         title,
-        readOnlyHint: !write,
+        readOnlyHint: readOnly,
         destructiveHint: destructive,
         openWorldHint: true,
       },
@@ -120,13 +122,18 @@ tool(server, "b24_call", {
   title: "Call any REST method",
   description:
     "Call any Bitrix24 REST method by exact name (e.g. 'crm.activity.list', 'tasks.task.counters.get', 'im.message.add') with JSON params. " +
-    "Use when no dedicated tool fits. Destructive methods (delete/remove/unbind...) require allow_destructive=true and explicit user confirmation.",
+    "Use when no dedicated tool fits. Destructive methods (delete/remove/unbind...) require allow_destructive=true and explicit user confirmation." +
+    (READ_ONLY ? " [Read-only mode: only read methods (get/list/search/...) are allowed.]" : " Can create, change and delete data — confirm write calls with the user."),
   input: {
     method: z.string().regex(/^[a-z0-9_.]+$/i).describe("REST method name, without .json"),
     params: anyObj.optional().describe("Method parameters as a JSON object"),
     allow_destructive: z.boolean().optional().describe("Must be true for delete/remove-type methods. Set only after the user confirmed."),
   },
+  // Not blocked in read-only mode: the handler itself allows only read methods there.
+  // Outside read-only mode it can call any method, so it must not advertise itself as read-only.
   write: false,
+  readOnly: READ_ONLY,
+  destructive: !READ_ONLY,
 }, async ({ method, params, allow_destructive }) => {
   const destructive = DESTRUCTIVE_RE.test(method);
   if (destructive && !allow_destructive) {
