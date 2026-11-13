@@ -16,6 +16,8 @@ export const ACCESS_TTL_MS = 60 * 60 * 1000;
 export const REFRESH_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 export const CODE_TTL_MS = 10 * 60 * 1000;
 const PENDING_TTL_MS = 10 * 60 * 1000;
+// Login-flow cookie: covers /authorize -> portal -> /b24/callback (<= PENDING_TTL) and the consent form (<= PENDING_TTL).
+const FLOW_COOKIE_MAX_AGE_S = 20 * 60;
 const B24_TIMEOUT_MS = 15000;
 
 const LOOPBACK = new Set(["localhost", "127.0.0.1"]);
@@ -41,6 +43,37 @@ function safeEqual(a, b) {
   const x = Buffer.from(String(a ?? ""));
   const y = Buffer.from(String(b ?? ""));
   return x.length === y.length && crypto.timingSafeEqual(x, y);
+}
+
+/**
+ * Login-flow cookie binding /authorize, /b24/callback and /consent to the browser that started the flow, so that a
+ * portal authorize link started by someone else cannot be completed in a victim's signed-in browser.
+ * With an https PUBLIC_URL it is `__Host-mcp_flow` (Secure, Path=/, no Domain: bound to exactly this host). Browsers
+ * refuse `__Host-` cookies without Secure, and Secure cookies are not sent over plain http, so with an http
+ * PUBLIC_URL (local development, tests) it is `mcp_flow` without Secure. Only its SHA-256 hash is stored.
+ */
+export function flowCookieName(config) {
+  return new URL(config.publicUrl).protocol === "https:" ? "__Host-mcp_flow" : "mcp_flow";
+}
+
+function flowCookieHeader(config, value, maxAgeS) {
+  const secure = new URL(config.publicUrl).protocol === "https:" ? "; Secure" : "";
+  return `${flowCookieName(config)}=${value}; Max-Age=${maxAgeS}; Path=/; HttpOnly${secure}; SameSite=Lax`;
+}
+
+/** Value of cookie `name` in a Cookie request header, or "". */
+function readCookie(header, name) {
+  for (const part of String(header ?? "").split(";")) {
+    const i = part.indexOf("=");
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return "";
+}
+
+/** True when the request carries the flow cookie whose hash was stored with the pending login. */
+function flowMatches(req, config, flowHash) {
+  const value = readCookie(req.headers.cookie, flowCookieName(config));
+  return !!value && typeof flowHash === "string" && safeEqual(hashToken(value), flowHash);
 }
 
 /** Bitrix24 side of the login: code exchange at oauth.bitrix.info and a REST client for the fresh tokens. */
@@ -135,6 +168,7 @@ export function createProvider({ config, store, b24 }) {
 
     async authorize(client, params, res) {
       const pendingId = randomToken();
+      const flow = randomToken();
       store.savePending(
         pendingId,
         {
@@ -145,9 +179,11 @@ export function createProvider({ config, store, b24 }) {
           state: params.state ?? null,
           scopes: params.scopes ?? [],
           resource: params.resource?.href ?? null,
+          flowHash: hashToken(flow),
         },
         PENDING_TTL_MS
       );
+      res.append("Set-Cookie", flowCookieHeader(config, flow, FLOW_COOKIE_MAX_AGE_S));
       const url = new URL("/oauth/authorize/", config.portal);
       url.search = new URLSearchParams({ client_id: config.clientId, state: pendingId }).toString();
       res.redirect(302, url.href);
@@ -224,6 +260,8 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
   const portalOrigin = new URL(config.portal).origin;
 
   const page = (res, status, html) => res.status(status).type("html").send(html);
+  const clearFlow = (res) => res.append("Set-Cookie", flowCookieHeader(config, "", 0));
+  const WRONG_BROWSER = "Вход нужно завершить в том же браузере, в котором он был начат. Подключитесь заново из приложения.";
 
   router.get("/b24/callback", async (req, res) => {
     const { code, state } = req.query;
@@ -232,6 +270,8 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
     if (!pending || pending.stage !== "authorize") {
       return page(res, 400, errorPage("Ссылка входа устарела или уже использована."));
     }
+    // The pending login is already consumed: a wrong or missing cookie ends it for good.
+    if (!flowMatches(req, config, pending.flowHash)) return page(res, 400, errorPage(WRONG_BROWSER));
     if (req.query.error !== undefined) {
       // The user declined on the portal: hand control back to the client (RFC 6749 4.1.2.1).
       const back = new URL(pending.redirectUri);
@@ -322,12 +362,14 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
     if (!data || data.stage !== "consent" || !safeEqual(body.csrf, data.csrf)) {
       return page(res, 400, errorPage("Форма устарела или уже отправлена."));
     }
+    if (!flowMatches(req, config, data.request?.flowHash)) return page(res, 400, errorPage(WRONG_BROWSER));
     const reqd = data.request;
     res.locals.userId = data.user.id;
     const back = new URL(reqd.redirectUri);
     if (reqd.state !== null && reqd.state !== undefined) back.searchParams.set("state", reqd.state);
 
     if (body.action === "deny") {
+      clearFlow(res);
       back.searchParams.set("error", "access_denied");
       return res.redirect(302, back.href);
     }
@@ -362,6 +404,7 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
       grantId, clientId: reqd.clientId, redirectUri: reqd.redirectUri, codeChallenge: reqd.codeChallenge,
     }, CODE_TTL_MS);
     back.searchParams.set("code", code);
+    clearFlow(res);
     res.redirect(302, back.href);
   });
 

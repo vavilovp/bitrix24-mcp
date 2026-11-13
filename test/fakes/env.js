@@ -1,5 +1,5 @@
 // Shared HTTP-mode test environment: fake portal + our app on port 0, and helpers that walk the
-// OAuth flow without cookies. Used by test/http-auth.test.js and test/http-mcp.test.js.
+// OAuth flow. fetch keeps no cookies: the helpers carry the login-flow cookie set at /authorize by hand. Used by test/http-auth.test.js and test/http-mcp.test.js.
 import assert from "node:assert/strict";
 import http from "node:http";
 import fs from "node:fs";
@@ -35,7 +35,8 @@ export async function startEnv(t, env = {}) {
     ...env,
   });
   const logs = [];
-  const out = { fake, base, logs, config, dir };
+  // consent_id -> Cookie header of the flow that produced that consent form (used by submitConsent).
+  const out = { fake, base, logs, config, dir, flowCookies: new Map() };
   const mount = () => {
     const app = createApp(config, { log: (line) => logs.push(line) });
     server.removeAllListeners("request");
@@ -89,8 +90,15 @@ export function pkce() {
 
 export const hidden = (html, name) => html.match(new RegExp(`name="${name}" value="([^"]*)"`))?.[1];
 
-/** register -> /authorize -> portal -> /b24/callback. Returns the callback response and flow state. */
-export async function toConsent(env, { userId = 5, redirectUri, clientName } = {}) {
+/** "name=value" of the login-flow cookie in an /authorize response (null if none). */
+export function flowCookie(res) {
+  const set = res.headers.getSetCookie?.() ?? [];
+  const c = set.find((v) => /^(__Host-)?mcp_flow=/.test(v));
+  return c ? c.split(";")[0] : null;
+}
+
+/** register -> /authorize -> portal. Returns the portal's callback URL (not yet visited) and the flow cookie. */
+export async function startFlow(env, { userId = 5, redirectUri, clientName } = {}) {
   env.fake.nextUserId = userId;
   const reg = await register(env, { redirectUri, clientName });
   assert.equal(reg.status, 201, JSON.stringify(reg.body));
@@ -108,6 +116,8 @@ export async function toConsent(env, { userId = 5, redirectUri, clientName } = {
   }).toString();
   const a = await get(authUrl.href);
   assert.equal(a.status, 302);
+  const cookie = flowCookie(a);
+  assert.ok(cookie, "/authorize sets the login-flow cookie");
   const portalUrl = new URL(a.headers.get("location"));
   assert.equal(portalUrl.origin, env.fake.origin);
   assert.equal(portalUrl.pathname, "/oauth/authorize/");
@@ -115,14 +125,25 @@ export async function toConsent(env, { userId = 5, redirectUri, clientName } = {
   const p = await get(portalUrl.href);
   assert.equal(p.status, 302);
   const callbackUrl = p.headers.get("location");
-  const cb = await get(callbackUrl);
-  const html = await cb.text();
-  return { client, verifier, state, callbackUrl, cb, html };
+  return { client, verifier, state, callbackUrl, cookie, authorize: a };
 }
 
+/** register -> /authorize -> portal -> /b24/callback (with the flow cookie). Returns the callback response and flow state. */
+export async function toConsent(env, opts = {}) {
+  const f = await startFlow(env, opts);
+  const cb = await get(f.callbackUrl, { Cookie: f.cookie });
+  const html = await cb.text();
+  const consentId = hidden(html, "consent_id");
+  if (consentId) env.flowCookies.set(consentId, f.cookie);
+  return { ...f, cb, html };
+}
+
+/** POST /consent with the form fields of `html`; sends the flow cookie of that form unless `headers` has a Cookie. */
 export async function submitConsent(env, html, extra = {}, headers = {}) {
   const fields = { consent_id: hidden(html, "consent_id"), csrf: hidden(html, "csrf"), action: "allow", ...extra };
-  return postForm(`${env.base}/consent`, fields, headers);
+  const cookie = env.flowCookies.get(fields.consent_id);
+  const hasCookie = Object.keys(headers).some((k) => k.toLowerCase() === "cookie");
+  return postForm(`${env.base}/consent`, fields, { ...(cookie && !hasCookie ? { Cookie: cookie } : {}), ...headers });
 }
 
 export async function exchange(env, client, code, verifier) {

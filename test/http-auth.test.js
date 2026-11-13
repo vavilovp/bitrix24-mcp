@@ -6,6 +6,7 @@ import { loadConfig } from "../server/config.js";
 import { truncate } from "../server/pages.js";
 import {
   SECRET_KEY, CLIENT_SECRET, startEnv, get, postForm, register, pkce, toConsent, submitConsent, exchange, login,
+  startFlow, flowCookie,
 } from "./fakes/env.js";
 
 const grantCount = (store) => store.countGrants();
@@ -399,4 +400,98 @@ test("loadConfig is strict about read-only lists and READ_ONLY", () => {
   for (const v of ["2", "maybe", "true # comment", "enabled"]) {
     assert.throws(() => loadConfig({ ...CONFIG_BASE, READ_ONLY: v }), /READ_ONLY/, v);
   }
+});
+
+test("login flow cookie: set at /authorize with safe attributes", async (t) => {
+  const env = await startEnv(t);
+  const f = await startFlow(env);
+  const raw = f.authorize.headers.getSetCookie().find((v) => v.startsWith(f.cookie.split("=")[0] + "="));
+  // http:// PUBLIC_URL (tests): no Secure, so no __Host- prefix either
+  assert.match(f.cookie, /^mcp_flow=[A-Za-z0-9_-]{43}$/);
+  assert.match(raw, /; HttpOnly/i);
+  assert.match(raw, /; SameSite=Lax/i);
+  assert.match(raw, /; Path=\//i);
+  assert.match(raw, /; Max-Age=(\d+)/i);
+  const maxAge = Number(raw.match(/Max-Age=(\d+)/i)[1]);
+  assert.ok(maxAge > 0 && maxAge <= 20 * 60, raw);
+  assert.doesNotMatch(raw, /Domain=/i);
+  assert.doesNotMatch(raw, /; Secure/i);
+});
+
+test("login flow cookie on an https PUBLIC_URL is __Host- and Secure", async (t) => {
+  const { createProvider } = await import("../server/oauth.js");
+  const config = loadConfig({ ...CONFIG_BASE, PUBLIC_URL: "https://mcp.example.ru" });
+  const saved = [];
+  const store = { savePending: (id, data) => saved.push(data) };
+  const provider = createProvider({ config, store, b24: {} });
+  const headers = {};
+  const res = {
+    append: (k, v) => { (headers[k.toLowerCase()] ??= []).push(v); },
+    redirect: () => {},
+  };
+  await provider.authorize({ client_id: "c" }, { redirectUri: "https://claude.ai/cb", codeChallenge: "x", scopes: [] }, res);
+  const raw = headers["set-cookie"]?.[0] ?? "";
+  assert.match(raw, /^__Host-mcp_flow=[A-Za-z0-9_-]{43}; /);
+  assert.match(raw, /; Secure/);
+  assert.match(raw, /; Path=\//);
+  assert.doesNotMatch(raw, /Domain=/i);
+  const value = raw.split(";")[0].split("=")[1];
+  assert.ok(saved[0].flowHash && saved[0].flowHash !== value);
+  assert.ok(!JSON.stringify(saved).includes(value), "cookie value is not stored");
+});
+
+test("callback without the flow cookie fails and consumes the login", async (t) => {
+  const env = await startEnv(t);
+  const f = await startFlow(env);
+  const cb = await get(f.callbackUrl);
+  assert.equal(cb.status, 400);
+  assert.doesNotMatch(await cb.text(), /consent_id/);
+  assert.equal(grantCount(env.store), 0);
+  assert.equal(env.store.getMeta("member_id"), null, "nothing stored");
+  assert.ok(!env.fake.reqs.some((r) => r.path === "/oauth/token/"), "the portal code is not even exchanged");
+  // the pending login is used up: the right cookie no longer helps
+  assert.equal((await get(f.callbackUrl, { Cookie: f.cookie })).status, 400);
+});
+
+test("callback with another flow's cookie fails", async (t) => {
+  const env = await startEnv(t);
+  const attacker = await startFlow(env); // attacker's own flow: they have its portal link
+  const victim = await startFlow(env); // victim's browser has its own (or any other) flow cookie
+  const cb = await get(attacker.callbackUrl, { Cookie: victim.cookie });
+  assert.equal(cb.status, 400);
+  assert.doesNotMatch(await cb.text(), /consent_id/);
+  assert.equal(grantCount(env.store), 0);
+  assert.equal((await get(attacker.callbackUrl, { Cookie: attacker.cookie })).status, 400, "consumed");
+  // a garbage cookie is refused as well
+  const third = await startFlow(env);
+  assert.equal((await get(third.callbackUrl, { Cookie: "mcp_flow=nope" })).status, 400);
+});
+
+test("consent without the flow cookie fails, consumes the form and stores nothing", async (t) => {
+  const env = await startEnv(t);
+  const c = await toConsent(env);
+  assert.equal(c.cb.status, 200);
+  const other = await startFlow(env);
+  const wrong = await submitConsent(env, c.html, {}, { Cookie: other.cookie });
+  assert.equal(wrong.status, 400);
+  assert.equal(wrong.headers.get("location"), null);
+  assert.equal(grantCount(env.store), 0);
+  // consumed: even the right cookie does not revive it
+  assert.equal((await submitConsent(env, c.html)).status, 400);
+  const c2 = await toConsent(env);
+  const none = await submitConsent(env, c2.html, {}, { Cookie: "" });
+  assert.equal(none.status, 400);
+  assert.equal(grantCount(env.store), 0);
+});
+
+test("full flow with the flow cookie works and clears the cookie", async (t) => {
+  const env = await startEnv(t);
+  const c = await toConsent(env);
+  assert.equal(c.cb.status, 200);
+  const res = await submitConsent(env, c.html);
+  assert.equal(res.status, 302);
+  assert.ok(new URL(res.headers.get("location")).searchParams.get("code"));
+  const cleared = res.headers.getSetCookie().find((v) => v.startsWith("mcp_flow="));
+  assert.match(cleared ?? "", /Max-Age=0/);
+  assert.equal(flowCookie({ headers: { getSetCookie: () => [] } }), null);
 });
