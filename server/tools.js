@@ -5,6 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BitrixError } from "./bitrix.js";
 import { extractOffice } from "./office.js";
+import { isBlockedAppMethod, scrubOutput } from "./policy.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
 export const VERSION = "1.1.2";
@@ -59,13 +60,21 @@ function tool(server, ctx, name, { title, description, input = {}, write = false
       if (write && ctx.readOnly) {
         return fail(new Error("The server is in read-only mode (BITRIX_READ_ONLY). Write operations are disabled."));
       }
+      let res;
       try {
-        return await handler(args ?? {});
+        res = await handler(args ?? {});
       } catch (e) {
-        return fail(e);
+        res = fail(e);
       }
+      return ctx.mode === "http" ? scrubResult(res) : res;
     }
   );
+}
+
+// HTTP mode: strip access tokens / download URLs from every text block (image blocks are left alone).
+function scrubResult(res) {
+  if (!res || !Array.isArray(res.content)) return res;
+  return { ...res, content: res.content.map((b) => (b?.type === "text" && typeof b.text === "string" ? { ...b, text: scrubOutput(b.text) } : b)) };
 }
 
 const pick = (obj, keys) => {
@@ -119,6 +128,9 @@ tool(server, ctx, "b24_call", {
   readOnly: ctx.readOnly,
   destructive: !ctx.readOnly,
 }, async ({ method, params, allow_destructive }) => {
+  if (ctx.mode === "http" && isBlockedAppMethod(method)) {
+    return fail(new Error(`'${method}' is an application-level method and is not available in HTTP mode (it would affect all users of the shared application).`));
+  }
   const destructive = DESTRUCTIVE_RE.test(method);
   if (destructive && !allow_destructive) {
     return fail(new Error(`'${method}' looks destructive. Confirm with the user, then call again with allow_destructive=true.`));
@@ -826,10 +838,12 @@ tool(server, ctx, "disk_file", {
   title: "Read / download Drive file",
   description:
     "Get a Drive file: metadata and content. Text files (txt, csv, md, json, xml…) and Office files (docx, xlsx, pptx — extracted text) are returned as text, images as images. " +
-    `Other formats (pdf, zip…) or save=true are saved to the local folder (${ctx.downloadDir}) and the path is returned.`,
+    (ctx.mode === "http"
+      ? "Other formats (pdf, zip…) or save=true return metadata with DETAIL_URL (open it on the portal); nothing is written to disk."
+      : `Other formats (pdf, zip…) or save=true are saved to the local folder (${ctx.downloadDir}) and the path is returned.`),
   input: {
     id,
-    save: z.boolean().optional().describe("Always save to the local download folder"),
+    save: z.boolean().optional().describe(ctx.mode === "http" ? "Skip inlining; return metadata and DETAIL_URL only" : "Always save to the local download folder"),
     max_text_chars: z.number().int().min(1000).max(200000).optional(),
   },
 }, async ({ id: fileId, save = false, max_text_chars = 60000 }) => {
@@ -844,6 +858,10 @@ tool(server, ctx, "disk_file", {
   const wantImage = IMG[ext] && size <= 4_000_000 && !save;
   if (!wantText && !wantImage && size > 300_000_000) {
     return ok({ file: meta }, "File is larger than 300 MB — download it from the portal instead.");
+  }
+  const inlineOffice = ["docx", "xlsx", "pptx"].includes(ext) && !save && size <= 30_000_000;
+  if (ctx.mode === "http" && !wantText && !wantImage && !inlineOffice) {
+    return ok({ file: meta }, "This file cannot be shown inline; open it on the portal via DETAIL_URL.");
   }
   const res = await fetch(f.DOWNLOAD_URL);
   if (!res.ok) throw new Error(`Download failed: HTTP ${res.status}`);
@@ -866,6 +884,9 @@ tool(server, ctx, "disk_file", {
   }
   if (wantImage) {
     return { content: [{ type: "text", text: JSON.stringify(meta) }, { type: "image", data: buf.toString("base64"), mimeType: IMG[ext] }] };
+  }
+  if (ctx.mode === "http") {
+    return ok({ file: meta }, "No text could be extracted; open the file on the portal via DETAIL_URL.");
   }
   await mkdir(ctx.downloadDir, { recursive: true });
   const safe = f.NAME.replace(/[\/\\:*?"<>|]/g, "_");

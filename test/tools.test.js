@@ -32,3 +32,73 @@ test("readOnly ctx disables write tools", async () => {
   const tools = (await c.listTools()).tools;
   assert.equal(tools.find((t) => t.name === "b24_call").annotations.readOnlyHint, true);
 });
+
+function stubCtx(handlers, extra = {}) {
+  const calls = [];
+  const client = () => ({
+    origin: "https://example.test",
+    call: async (m, p) => { calls.push(m); return handlers[m]?.(p) ?? { result: [] }; },
+    result: async (m, p) => { calls.push(m); return (await (handlers[m]?.(p) ?? { result: [] })).result; },
+  });
+  return { ctx: { client, readOnly: false, mode: "http", ...extra }, calls };
+}
+async function connectStub(ctx) {
+  const server = new McpServer({ name: "bitrix24", version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
+  registerTools(server, ctx);
+  const [a, b] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: "t", version: "0" });
+  await Promise.all([server.connect(a), client.connect(b)]);
+  return client;
+}
+
+test("http mode blocks app methods in b24_call", async () => {
+  const { ctx, calls } = stubCtx({});
+  const c = await connectStub(ctx);
+  const r = await c.callTool({ name: "b24_call", arguments: { method: "Event.Bind", params: {} } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /Event\.Bind/);
+  assert.equal(calls.length, 0);
+  const ok = await c.callTool({ name: "b24_call", arguments: { method: "crm.deal.userfield.list" } });
+  assert.notEqual(ok.isError, true);
+});
+
+test("stdio mode does not block app methods", async () => {
+  const { ctx, calls } = stubCtx({}, { mode: "stdio" });
+  const c = await connectStub(ctx);
+  const r = await c.callTool({ name: "b24_call", arguments: { method: "event.get" } });
+  assert.notEqual(r.isError, true);
+  assert.deepEqual(calls, ["event.get"]);
+});
+
+test("http mode scrubs tokens", async () => {
+  const items = [{ ID: 1, NAME: "a.pdf", DETAIL_URL: "https://example.test/d/1?auth=SECRET&x=1", DOWNLOAD_URL: "https://example.test/dl?auth=SECRET" }];
+  const { ctx } = stubCtx({ "disk.folder.getChildren": () => ({ result: items }), "x": () => ({ result: [] }) });
+  const c = await connectStub(ctx);
+  const r = await c.callTool({ name: "disk_list", arguments: { folder_id: 1 } });
+  const t1 = r.content[0].text;
+  assert.ok(!t1.includes("SECRET"), t1);
+  assert.ok(t1.includes("x=1"));
+  const r2 = await c.callTool({ name: "b24_call", arguments: { method: "disk.folder.getChildren", params: {} } });
+  assert.ok(!r2.content[0].text.includes("SECRET"));
+  assert.ok(!r2.content[0].text.includes("example.test/dl"));
+  assert.match(r2.content[0].text, /\[removed\]/);
+});
+
+test("http disk_file does not write files", async () => {
+  const { mkdtemp, readdir, rm } = await import("node:fs/promises");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const dir = await mkdtemp(path.join(os.tmpdir(), "dl-"));
+  const f = { ID: 9, NAME: "r.pdf", SIZE: 100, DOWNLOAD_URL: "https://example.test/dl?auth=SECRET", DETAIL_URL: "https://example.test/d/9?auth=SECRET" };
+  const { ctx } = stubCtx({ "disk.file.get": () => ({ result: f }) }, { downloadDir: dir });
+  const c = await connectStub(ctx);
+  const tools = (await c.listTools()).tools;
+  assert.ok(!/undefined|local folder/.test(tools.find((t) => t.name === "disk_file").description));
+  const r = await c.callTool({ name: "disk_file", arguments: { id: 9 } });
+  const text = r.content[0].text;
+  assert.match(text, /DETAIL_URL/);
+  assert.ok(!text.includes("saved_to"));
+  assert.ok(!text.includes("SECRET"));
+  assert.deepEqual(await readdir(dir), []);
+  await rm(dir, { recursive: true });
+});
