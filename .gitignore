@@ -3,4 +3,3 @@ dist/
 *.mcpb
 .DS_Store
 .env
-data/

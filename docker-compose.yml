@@ -9,4 +9,7 @@ services:
       # Only the DSM reverse proxy may reach the container (the server trusts X-Forwarded-* from it).
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./data:/data
+      - bitrix24-mcp-data:/data
+
+volumes:
+  bitrix24-mcp-data:
