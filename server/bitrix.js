@@ -28,15 +28,58 @@ export function normalizeWebhook(url) {
 }
 
 export class Bitrix {
-  constructor(webhookUrl, { timeoutMs = 60000 } = {}) {
-    this.base = normalizeWebhook(webhookUrl);
-    this.origin = new URL(this.base).origin;
+  /**
+   * Webhook mode: new Bitrix(webhookUrl, opts).
+   * OAuth mode: new Bitrix({ oauth: { endpoint, origin, getTokens, refresh } }, opts)
+   * where getTokens/refresh resolve to { accessToken, expiresAt (ms epoch) }.
+   */
+  constructor(source, { timeoutMs = 60000 } = {}) {
+    if (source && typeof source === "object" && source.oauth) {
+      const o = source.oauth;
+      this.oauth = o;
+      this.base = o.endpoint;
+      this.origin = o.origin;
+      this._tokens = null;
+      this._refreshing = null;
+    } else {
+      this.base = normalizeWebhook(source);
+      this.origin = new URL(this.base).origin;
+    }
     this.timeoutMs = timeoutMs;
     this._userCache = new Map();
   }
 
-  async call(method, params = {}, attempt = 0) {
+  async _currentTokens() {
+    if (!this._tokens) this._tokens = await this.oauth.getTokens();
+    if (this._tokens.expiresAt - Date.now() < 60000) await this._refresh(this._tokens.accessToken);
+    return this._tokens;
+  }
+
+  // Refresh once per instance at a time; a caller whose token was already replaced skips the refresh.
+  async _refresh(usedToken) {
+    if (this._tokens && usedToken !== undefined && this._tokens.accessToken !== usedToken && !this._refreshing) return;
+    if (!this._refreshing) {
+      this._refreshing = (async () => {
+        try {
+          this._tokens = await this.oauth.refresh();
+        } catch {
+          throw new BitrixError("oauth.refresh", "AUTH_EXPIRED", "could not refresh the Bitrix24 access token; sign in again");
+        } finally {
+          this._refreshing = null;
+        }
+      })();
+    }
+    await this._refreshing;
+  }
+
+  async call(method, params = {}, attempt = 0, authRetried = false) {
     const url = `${this.base}${method}.json`;
+    let body = JSON.stringify(params ?? {});
+    let usedToken;
+    if (this.oauth) {
+      usedToken = (await this._currentTokens()).accessToken;
+      body = JSON.stringify({ ...(params ?? {}), auth: usedToken });
+    }
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), this.timeoutMs);
     let res;
@@ -44,7 +87,7 @@ export class Bitrix {
       res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify(params ?? {}),
+        body,
         signal: ctrl.signal,
       });
     } catch (e) {
@@ -66,9 +109,14 @@ export class Bitrix {
     }
 
     if (data && data.error) {
+      if (this.oauth && data.error === "expired_token") {
+        if (authRetried) throw new BitrixError(method, "AUTH_EXPIRED", "access token rejected after refresh; sign in again", res.status);
+        await this._refresh(usedToken);
+        return this.call(method, params, attempt, true);
+      }
       if (RETRYABLE.has(data.error) && attempt < 4) {
         await new Promise((r) => setTimeout(r, 600 * 2 ** attempt));
-        return this.call(method, params, attempt + 1);
+        return this.call(method, params, attempt + 1, authRetried);
       }
       throw new BitrixError(method, data.error, data.error_description, res.status);
     }
