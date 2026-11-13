@@ -51,7 +51,7 @@
 
    Команды `docker` по SSH в DSM выполняются через `sudo` (обычный пользователь не имеет доступа к сокету Docker). Container Manager в DSM 7.2 ставит Compose v2, команда `docker compose`; если её нет (старый пакет Docker), используйте `sudo docker-compose` с теми же аргументами.
 4. Данные (SQLite с зашифрованными токенами) лежат в именованном томе Docker `bitrix24-mcp-data` (в проекте Compose он может называться с префиксом, например `bitrix24-mcp_bitrix24-mcp-data`). Том создаётся с правами пользователя контейнера и переживает пересборку и обновление контейнера. Посмотреть: Container Manager → Том, или по SSH `sudo docker volume ls`. Резервная копия: `sudo docker run --rm -v bitrix24-mcp_bitrix24-mcp-data:/data -v "$PWD":/backup alpine tar czf /backup/mcp-data.tgz -C /data .` (точное имя тома смотрите в `sudo docker volume ls`). Сброс (все сотрудники войдут заново): остановить проект и выполнить `sudo docker volume rm <имя тома>`; `sudo docker compose down -v` тоже удаляет том.
-5. Проверка: `curl https://mcp.example.synology.me/healthz` возвращает `{"status":"ok"}`.
+5. Проверка: `curl https://mcp.example.synology.me/healthz` возвращает `{"status":"ok","version":"…"}` с номером запущенной версии.
 
 Логи: Container Manager → Контейнер → Журнал. Одна строка на запрос: `METHOD /path STATUS user=ID`.
 
@@ -94,7 +94,9 @@ sudo docker compose pull
 sudo docker compose up -d
 ```
 
-В Container Manager: Проект → `bitrix24-mcp` → «Действие» → «Остановить», затем «Собрать» (скачивает свежий образ и пересоздаёт контейнер). Если в `docker-compose.yml` закреплена версия, сначала поменяйте её там.
+В Container Manager: Проект → `bitrix24-mcp` → «Действие» → «Остановить», затем «Собрать». Благодаря `pull_policy: always` в `docker-compose.yml` при этом скачивается свежий образ из GHCR и контейнер пересоздаётся. Если в вашем `docker-compose.yml` этой строки нет (проект создан до версии 1.2.2), добавьте её: «Действие» → «Изменить», строка `pull_policy: always` под `image:`. Без неё «Собрать» берёт уже скачанный образ, и обновление не приходит. Раздел «Реестр» в Container Manager ищет только на Docker Hub, поэтому образ из `ghcr.io` там не найти, но Compose скачивает его напрямую. Если в `docker-compose.yml` закреплена версия, сначала поменяйте её там.
+
+Проверка после обновления: `curl https://mcp.example.synology.me/healthz` показывает новую версию.
 
 Данные в томе `bitrix24-mcp-data` сохраняются (не используйте `down -v`).
 

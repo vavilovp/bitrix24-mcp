@@ -1,3 +1,4 @@
+import { VERSION } from "../server/tools.js";
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -300,7 +301,7 @@ test("main runs store cleanup at start", async (t) => {
   assert.equal(m.app.locals.store.countGrants(), 0);
   const h = await fetch(`http://127.0.0.1:${m.server.address().port}/healthz`);
   assert.equal(h.status, 200);
-  assert.deepEqual(await h.json(), { status: "ok" });
+  assert.deepEqual(await h.json(), { status: "ok", version: VERSION });
 });
 
 test("client_endpoint without a trailing slash works through login, tool call and refresh", async (t) => {

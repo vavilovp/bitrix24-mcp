@@ -74,7 +74,7 @@ export function createApp(config, deps = {}) {
   app.locals.grants = grants;
 
   app.use(requestLog(log));
-  app.get("/healthz", (req, res) => res.json({ status: "ok" }));
+  app.get("/healthz", (req, res) => res.json({ status: "ok", version: VERSION }));
   app.use((req, res, next) => {
     res.set({
       "X-Content-Type-Options": "nosniff",
