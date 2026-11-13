@@ -15,7 +15,7 @@ import { loadConfig } from "./config.js";
 import { openStore } from "./store.js";
 import { createProvider, createB24Login, b24Routes } from "./oauth.js";
 import { createGrantClients } from "./grants.js";
-import { registerTools, SERVER_INSTRUCTIONS, VERSION } from "./tools.js";
+import { registerTools, serverInstructions, VERSION } from "./tools.js";
 
 const MINUTE = 60 * 1000;
 const HOUR = 60 * MINUTE;
@@ -159,7 +159,7 @@ function mcpHandler({ config, grants, resourceMetadataUrl }) {
       if (e instanceof BitrixError) return authFailure(res, { code: e.code, grantId, grants, resourceMetadataUrl });
       return next(e);
     }
-    const server = new McpServer({ name: "bitrix24", version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
+    const server = new McpServer({ name: "bitrix24", version: VERSION }, { instructions: serverInstructions("http") });
     registerTools(server, { client: () => session.bitrix, readOnly: session.readOnly, mode: "http" });
     const transport = new WebStandardStreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => {

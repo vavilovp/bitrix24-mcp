@@ -302,3 +302,26 @@ test("main runs store cleanup at start", async (t) => {
   assert.equal(h.status, 200);
   assert.deepEqual(await h.json(), { status: "ok" });
 });
+
+test("client_endpoint without a trailing slash works through login, tool call and refresh", async (t) => {
+  const env = await setup(t);
+  env.fake.clientEndpoint = `${env.fake.origin}/rest`;
+  const { bearer, grantId } = await signedIn(env);
+  assert.equal(env.store.getGrant(grantId).b24.endpoint, `${env.fake.origin}/rest/`);
+  assert.equal(resultJson(await rawCall(env, bearer, "b24_whoami")).user.ID, "5");
+  expireBitrixToken(env, grantId);
+  const r = await rawCall(env, bearer, "b24_whoami");
+  assert.equal(r.status, 200, r.text);
+  assert.equal(refreshReqs(env.fake).length, 1);
+  assert.equal(env.store.getGrant(grantId).b24.endpoint, `${env.fake.origin}/rest/`);
+  assert.equal(restReqs(env.fake, "user.current").at(-1).auth, env.store.getGrant(grantId).b24.accessToken);
+});
+
+test("http mode instructions describe the signed-in user", async (t) => {
+  const env = await setup(t);
+  const { bearer } = await signedIn(env);
+  const client = await mcpClient(t, env, bearer);
+  const text = client.getInstructions();
+  assert.match(text, /signed-in user/);
+  assert.doesNotMatch(text, /webhook/i);
+});

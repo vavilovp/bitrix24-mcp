@@ -70,7 +70,7 @@ export function createB24Login({ config, fetchImpl = fetch }) {
         accessToken: String(data.access_token),
         refreshToken: String(data.refresh_token),
         expiresAt: Date.now() + expiresIn * 1000,
-        endpoint: String(data.client_endpoint),
+        endpoint: String(data.client_endpoint).replace(/\/*$/, "/"),
         memberId: String(data.member_id ?? ""),
       };
     },

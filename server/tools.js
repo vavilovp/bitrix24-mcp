@@ -8,17 +8,29 @@ import { extractOffice } from "./office.js";
 import { isBlockedAppMethod, blockedInBatch, normalizeMethod, scrubOutput } from "./policy.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
-export const VERSION = "1.1.2";
+export const VERSION = "1.2.0";
 const MAX_OUTPUT = 80000;
 
-export const SERVER_INSTRUCTIONS =
-  "Tools for a Bitrix24 portal (works with on-premise 'box' installs) via an incoming webhook. " +
-  "All actions run as the webhook owner. Lists are paged by 50: pass `start` = previous `next`. " +
+const INSTRUCTIONS_TAIL =
+  "Lists are paged by 50: pass `start` = previous `next`. " +
   "Dates: ISO 8601 (e.g. 2026-11-07 or 2026-11-07T15:00:00+04:00). " +
   "Task statuses (REAL_STATUS): 2 waiting, 3 in progress, 4 awaiting control, 5 completed, 6 deferred. " +
   "Chat DIALOG_ID: 'chat123' for group chats, a user ID for 1:1 chats, 'sg12' for a workgroup chat. " +
   "Before any write, delete or message-sending action, confirm with the user. " +
   "For anything not covered, use b24_call with the exact REST method name.";
+
+export const SERVER_INSTRUCTIONS =
+  "Tools for a Bitrix24 portal (works with on-premise 'box' installs) via an incoming webhook. " +
+  "All actions run as the webhook owner. " + INSTRUCTIONS_TAIL;
+
+/** Server instructions for a mode. "stdio" is the webhook text; "http" acts as the signed-in user. */
+export function serverInstructions(mode) {
+  if (mode !== "http") return SERVER_INSTRUCTIONS;
+  return (
+    "Tools for a Bitrix24 portal (works with on-premise 'box' installs). " +
+    "All actions run as the signed-in user, with that user's permissions. " + INSTRUCTIONS_TAIL
+  );
+}
 
 // ---------- helpers ----------
 
@@ -100,8 +112,10 @@ const client = () => ctx.client();
 // ===== General =====
 
 tool(server, ctx, "b24_whoami", {
-  title: "Webhook owner and permissions",
-  description: "Show which user the webhook acts as, the portal address and the granted scopes. Use to diagnose permission errors.",
+  title: ctx.mode === "http" ? "Signed-in user and permissions" : "Webhook owner and permissions",
+  description: ctx.mode === "http"
+    ? "Show which user the tools act as (the signed-in user), the portal address and the granted scopes. Use to diagnose permission errors."
+    : "Show which user the webhook acts as, the portal address and the granted scopes. Use to diagnose permission errors.",
 }, async () => {
   const c = client();
   const [profile, scope] = await Promise.all([c.result("profile"), c.result("scope").catch(() => null)]);
@@ -109,7 +123,9 @@ tool(server, ctx, "b24_whoami", {
 });
 
 const DESTRUCTIVE_RE = /(^|\.)(delete|remove|unbind|unregister|purge|erase|markdeleted|deletefrom\w*|trash|fire|ban)$/i;
-const SAFE_READ_RE = /(^|\.)(get|list|getlist|search|fields|getfields|getchildren|getbyid|getnearest|current|count|counters|info|types|scope|profile|methods|recent|accessibility|history)(\.|$)/i;
+// Read verbs count anywhere in the name; nouns like recent/counters/history only as the final segment
+// (im.recent.pin, im.counters.reset are writes; im.recent.get, tasks.task.counters.get are reads).
+const SAFE_READ_RE = /(^|\.)(get|list|getlist|search|fields|getfields|getchildren|getbyid|getnearest)(\.|$)|(^|\.)(current|count|counters|info|types|scope|profile|methods|recent|accessibility|history)$/i;
 
 tool(server, ctx, "b24_call", {
   title: "Call any REST method",

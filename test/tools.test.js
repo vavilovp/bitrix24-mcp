@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { registerTools, SERVER_INSTRUCTIONS, VERSION } from "../server/tools.js";
+import { registerTools, SERVER_INSTRUCTIONS, serverInstructions, VERSION } from "../server/tools.js";
 
 async function connect(ctx) {
   const server = new McpServer({ name: "bitrix24", version: VERSION }, { instructions: SERVER_INSTRUCTIONS });
@@ -125,4 +125,35 @@ test("http mode inspects batch commands", async () => {
   r = await c.callTool({ name: "b24_call", arguments: { method: "batch", params: { cmd: { a: "crm.deal.list" } } } });
   assert.notEqual(r.isError, true);
   assert.deepEqual(calls, ["batch"]);
+});
+
+test("read-only b24_call: reads pass, write methods under recent/counters/history are refused", async () => {
+  const { ctx, calls } = stubCtx({}, { readOnly: true });
+  const c = await connectStub(ctx);
+  for (const method of ["im.recent.get", "im.recent.list", "tasks.task.counters.get", "tasks.task.history.list", "crm.deal.list", "user.current", "tasks.task.get", "im.counters.get", "crm.lead.fields", "disk.folder.getchildren", "im.recent"]) {
+    const r = await c.callTool({ name: "b24_call", arguments: { method } });
+    assert.ok(!r.isError, `${method} should be allowed: ${r.content[0].text}`);
+  }
+  const allowed = calls.length;
+  for (const method of ["im.recent.pin", "im.recent.hide", "im.recent.unread", "im.counters.reset", "tasks.task.history.clear", "crm.deal.update", "im.message.add"]) {
+    const r = await c.callTool({ name: "b24_call", arguments: { method } });
+    assert.equal(r.isError, true, `${method} must be refused`);
+    assert.match(r.content[0].text, /Read-only mode/);
+  }
+  assert.equal(calls.length, allowed, "no refused method reached the portal");
+});
+
+test("server instructions are mode-aware", () => {
+  assert.match(serverInstructions("stdio"), /webhook owner/);
+  assert.equal(serverInstructions("stdio"), SERVER_INSTRUCTIONS);
+  const h = serverInstructions("http");
+  assert.match(h, /signed-in user/);
+  assert.doesNotMatch(h, /webhook/i);
+});
+
+test("http mode b24_whoami description does not mention the webhook", async () => {
+  const { ctx } = stubCtx({});
+  const c = await connectStub(ctx);
+  const w = (await c.listTools()).tools.find((x) => x.name === "b24_whoami");
+  assert.doesNotMatch(w.description + (w.title || ""), /webhook/i);
 });
