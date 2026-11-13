@@ -32,6 +32,9 @@ export class Bitrix {
    * Webhook mode: new Bitrix(webhookUrl, opts).
    * OAuth mode: new Bitrix({ oauth: { endpoint, origin, getTokens, refresh } }, opts)
    * where getTokens/refresh resolve to { accessToken, expiresAt (ms epoch) }.
+   * Contract: getTokens() resolving null/undefined means the grant is gone -> BitrixError AUTH_EXPIRED;
+   * getTokens() throwing propagates as-is. refresh() rejecting with error.code === "invalid_grant" means
+   * the grant was revoked -> AUTH_EXPIRED; any other refresh failure is transient -> AUTH_REFRESH_FAILED.
    */
   constructor(source, { timeoutMs = 60000 } = {}) {
     if (source && typeof source === "object" && source.oauth) {
@@ -50,24 +53,44 @@ export class Bitrix {
   }
 
   async _currentTokens() {
-    if (!this._tokens) this._tokens = await this.oauth.getTokens();
+    if (!this._tokens) {
+      if (!this._loading) {
+        this._loading = Promise.resolve()
+          .then(() => this.oauth.getTokens())
+          .then((t) => {
+            if (!t) throw new BitrixError("oauth.getTokens", "AUTH_EXPIRED", "no Bitrix24 grant for this user; sign in again");
+            if (!this._tokens) this._tokens = t;
+          })
+          .finally(() => {
+            this._loading = null;
+          });
+      }
+      await this._loading;
+    }
     if (this._tokens.expiresAt - Date.now() < 60000) await this._refresh(this._tokens.accessToken);
     return this._tokens;
   }
 
   // Refresh once per instance at a time; a caller whose token was already replaced skips the refresh.
   async _refresh(usedToken) {
-    if (this._tokens && usedToken !== undefined && this._tokens.accessToken !== usedToken && !this._refreshing) return;
+    if (!this._refreshing && this._tokens && this._tokens.accessToken !== usedToken) return;
     if (!this._refreshing) {
-      this._refreshing = (async () => {
-        try {
-          this._tokens = await this.oauth.refresh();
-        } catch {
-          throw new BitrixError("oauth.refresh", "AUTH_EXPIRED", "could not refresh the Bitrix24 access token; sign in again");
-        } finally {
+      this._refreshing = Promise.resolve()
+        .then(() => this.oauth.refresh())
+        .then(
+          (t) => {
+            this._tokens = t;
+          },
+          (e) => {
+            if (e && e.code === "invalid_grant") {
+              throw new BitrixError("oauth.refresh", "AUTH_EXPIRED", "the Bitrix24 grant was revoked; sign in again");
+            }
+            throw new BitrixError("oauth.refresh", "AUTH_REFRESH_FAILED", "could not refresh the Bitrix24 access token; try again later");
+          }
+        )
+        .finally(() => {
           this._refreshing = null;
-        }
-      })();
+        });
     }
     await this._refreshing;
   }

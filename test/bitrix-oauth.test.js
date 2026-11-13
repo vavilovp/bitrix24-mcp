@@ -150,3 +150,80 @@ test("refresh failure gives AUTH_EXPIRED", async () => {
     f.close();
   }
 });
+
+const mk = (f, getTokens, refresh) =>
+  new Bitrix({ oauth: { endpoint: f.endpoint, origin: f.origin, getTokens, refresh } });
+const stale = async () => ({ accessToken: "OLDSECRET", expiresAt: Date.now() - 1000 });
+const fresh = { accessToken: "A2", expiresAt: Date.now() + 3600e3 };
+
+test("invalid_grant gives AUTH_EXPIRED", async () => {
+  const f = await fake(() => ok);
+  try {
+    const b = mk(f, stale, async () => {
+      throw Object.assign(new Error("x OLDSECRET"), { code: "invalid_grant" });
+    });
+    await assert.rejects(b.call("m"), (e) => e.code === "AUTH_EXPIRED" && !e.message.includes("SECRET"));
+  } finally {
+    f.close();
+  }
+});
+
+test("transient refresh failure gives AUTH_REFRESH_FAILED and next call recovers", async () => {
+  const f = await fake(() => ok);
+  try {
+    let n = 0;
+    const b = mk(f, stale, async () => {
+      if (n++ === 0) throw new Error("fetch failed OLDSECRET");
+      return fresh;
+    });
+    await assert.rejects(b.call("m"), (e) => e.code === "AUTH_REFRESH_FAILED" && !e.message.includes("SECRET"));
+    await b.call("m");
+    assert.equal(n, 2);
+    assert.equal(f.reqs[0].body.auth, "A2");
+  } finally {
+    f.close();
+  }
+});
+
+test("concurrent callers share one rejected refresh", async () => {
+  const f = await fake(() => ok);
+  try {
+    let n = 0;
+    const b = mk(f, stale, async () => {
+      n++;
+      await new Promise((r) => setTimeout(r, 30));
+      throw new Error("down");
+    });
+    const rs = await Promise.allSettled([1, 2, 3, 4].map(() => b.call("m")));
+    assert.ok(rs.every((r) => r.status === "rejected" && r.reason.code === "AUTH_REFRESH_FAILED"));
+    assert.equal(n, 1);
+  } finally {
+    f.close();
+  }
+});
+
+test("getTokens null gives AUTH_EXPIRED; throw propagates", async () => {
+  const f = await fake(() => ok);
+  try {
+    await assert.rejects(mk(f, async () => null, async () => fresh).call("m"), (e) => e.code === "AUTH_EXPIRED");
+    const boom = new Error("db down");
+    await assert.rejects(mk(f, async () => { throw boom; }, async () => fresh).call("m"), (e) => e === boom);
+  } finally {
+    f.close();
+  }
+});
+
+test("sync-throwing refresh does not poison later calls", async () => {
+  const f = await fake(() => ok);
+  try {
+    let n = 0;
+    const b = mk(f, stale, () => {
+      if (n++ === 0) throw new Error("sync");
+      return Promise.resolve(fresh);
+    });
+    await assert.rejects(b.call("m"), (e) => e.code === "AUTH_REFRESH_FAILED");
+    await b.call("m");
+  } finally {
+    f.close();
+  }
+});
