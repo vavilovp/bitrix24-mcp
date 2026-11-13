@@ -141,7 +141,7 @@ test("wrong key fails closed", (t) => {
 
 test("cleanup removes expired", (t) => {
   const s = openStore(tmpDb(t), keyA);
-  const now = 1_000_000;
+  const now = Date.now() + 11 * 60_000; // grants created above are older than the 10 min grace
   s.savePending("old", {}, -1);
   s.saveCode("oldc", {}, -1);
   const g1 = s.createGrant(grantInput());
@@ -159,6 +159,28 @@ test("cleanup removes expired", (t) => {
   assert.equal(s.getGrant(g2), null);
   assert.equal(s.getGrant(g3), null);
   assert.equal(s.getToken("na"), null);
+});
+
+test("cleanup keeps a fresh grant without tokens (awaiting code exchange)", (t) => {
+  const s = openStore(tmpDb(t), keyA);
+  const fresh = s.createGrant(grantInput());
+  s.cleanup(Date.now() + 5 * 60_000);
+  assert.notEqual(s.getGrant(fresh), null);
+  s.cleanup(Date.now() + 11 * 60_000);
+  assert.equal(s.getGrant(fresh), null);
+});
+
+test("corrupt grant data fails closed", (t) => {
+  const file = tmpDb(t);
+  const s = openStore(file, keyA);
+  const id = s.createGrant(grantInput());
+  s.close();
+  const raw = new DatabaseSync(file);
+  raw.prepare("UPDATE grants SET departments = 'not json'").run();
+  raw.close();
+  const s2 = openStore(file, keyA);
+  assert.equal(s2.getGrant(id), null);
+  s2.close();
 });
 
 test("cleanup removes clients unused for 30 days", (t) => {

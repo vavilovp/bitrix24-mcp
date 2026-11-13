@@ -3,6 +3,8 @@ import { DatabaseSync } from "node:sqlite";
 import crypto from "node:crypto";
 import { encrypt, decrypt } from "./crypto.js";
 
+// A grant is created at consent; its tokens appear only when the client exchanges the code (<= code TTL).
+const GRANT_GRACE_MS = 10 * 60 * 1000;
 const CLIENT_IDLE_MS = 30 * 24 * 60 * 60 * 1000;
 
 const SCHEMA = `
@@ -29,9 +31,8 @@ export function openStore(file, key) {
   const q = (sql) => db.prepare(sql);
 
   function take(table, col, id) {
-    const row = q(`SELECT data, expires_at FROM ${table} WHERE ${col} = ?`).get(id);
+    const row = q(`DELETE FROM ${table} WHERE ${col} = ? RETURNING data, expires_at`).get(id);
     if (!row) return null;
-    q(`DELETE FROM ${table} WHERE ${col} = ?`).run(id);
     return row.expires_at > Date.now() ? JSON.parse(row.data) : null;
   }
 
@@ -81,8 +82,9 @@ export function openStore(file, key) {
     getGrant(id) {
       const r = q("SELECT * FROM grants WHERE id = ?").get(id);
       if (!r) return null;
-      let accessToken, refreshToken;
+      let accessToken, refreshToken, departments;
       try {
+        departments = JSON.parse(r.departments);
         accessToken = decrypt(r.b24_access, key);
         refreshToken = decrypt(r.b24_refresh, key);
       } catch {
@@ -95,7 +97,7 @@ export function openStore(file, key) {
         userName: r.user_name,
         clientId: r.client_id,
         readOnlyChoice: !!r.read_only_choice,
-        departments: JSON.parse(r.departments),
+        departments,
         createdAt: r.created_at,
         b24: { accessToken, refreshToken, expiresAt: r.b24_expires_at, endpoint: r.b24_endpoint },
       };
@@ -129,9 +131,10 @@ export function openStore(file, key) {
       q("DELETE FROM pending WHERE expires_at <= ?").run(now);
       q("DELETE FROM codes WHERE expires_at <= ?").run(now);
       q("DELETE FROM tokens WHERE expires_at <= ?").run(now);
-      q(`DELETE FROM tokens WHERE grant_id IN (SELECT id FROM grants WHERE id NOT IN
-           (SELECT grant_id FROM tokens WHERE kind = 'refresh'))`).run();
-      q("DELETE FROM grants WHERE id NOT IN (SELECT grant_id FROM tokens WHERE kind = 'refresh')").run();
+      q(`DELETE FROM tokens WHERE grant_id IN (SELECT id FROM grants WHERE created_at <= ? AND id NOT IN
+           (SELECT grant_id FROM tokens WHERE kind = 'refresh'))`).run(now - GRANT_GRACE_MS);
+      q("DELETE FROM grants WHERE created_at <= ? AND id NOT IN (SELECT grant_id FROM tokens WHERE kind = 'refresh')").run(
+        now - GRANT_GRACE_MS);
       q("DELETE FROM clients WHERE last_used_at <= ?").run(now - CLIENT_IDLE_MS);
     },
   };
