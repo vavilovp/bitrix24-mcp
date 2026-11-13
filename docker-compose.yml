@@ -3,6 +3,9 @@ services:
     # Prebuilt image from GitHub Container Registry (amd64 + arm64).
     # :latest follows released versions (git tags vX.Y.Z); pin a version (e.g. :1.2.0) to update deliberately.
     image: ghcr.io/vavilovp/bitrix24-mcp:latest
+    # Pull on every "up"/Build: otherwise a cached :latest is reused and updates never arrive
+    # (Container Manager's Registry search covers Docker Hub only, not ghcr.io).
+    pull_policy: always
     container_name: bitrix24-mcp
     restart: unless-stopped
     env_file: .env

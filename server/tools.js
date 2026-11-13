@@ -8,7 +8,7 @@ import { extractOffice } from "./office.js";
 import { isBlockedAppMethod, blockedInBatch, normalizeMethod, scrubOutput } from "./policy.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
-export const VERSION = "1.2.1";
+export const VERSION = "1.2.2";
 const MAX_OUTPUT = 80000;
 
 const INSTRUCTIONS_TAIL =
