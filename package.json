@@ -1,6 +1,6 @@
 {
   "name": "bitrix24-mcp",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "Bitrix24 MCP server over incoming webhook",
   "main": "server/index.js",
   "keywords": [],

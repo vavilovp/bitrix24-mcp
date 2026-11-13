@@ -192,3 +192,65 @@ test("insufficient_scope hint is mode-specific", async () => {
   const s = (await stdio.callTool({ name: "b24_call", arguments: { method: "crm.deal.list" } })).content[0].text;
   assert.match(s, /\nThe webhook lacks the permission \(scope\) for this method\. Add it in the webhook settings on the portal\.$/);
 });
+
+// ---- tasks_list: limit and brief output ----
+function fakeTasks(n) {
+  return Array.from({ length: n }, (_, i) => ({
+    id: String(1000 + i), title: `Задача ${i}`, priority: i === 0 ? "2" : "1", status: "2", subStatus: "-1",
+    deadline: "2026-12-01T17:00:00+03:00", createdDate: "2026-11-01T10:00:00+03:00", changedDate: "2026-11-10T10:00:00+03:00",
+    responsibleId: "7", createdBy: "8", groupId: "5", parentId: "0", timeEstimate: "0", activityDate: "2026-11-10T10:00:00+03:00",
+    ufTaskWebdavFiles: [], auditors: ["9"],
+    group: { id: "5", name: "Проект", opened: true, membersCount: 3, image: "", additionalData: [] },
+    creator: { id: "8", name: "Анна Смирнова", link: "/company/personal/user/8/", icon: "/i.png", workPosition: "" },
+    responsible: { id: "7", name: "Иван Петров", link: "/company/personal/user/7/", icon: "/i.png", workPosition: "" },
+    auditorsData: { 9: { id: "9", name: "Олег Сидоров", link: "/u/9/", icon: "/i.png" } },
+    tags: { 1: { id: 1, title: "ERP" }, 2: { id: 2, title: "отчёты" } },
+    description: "Длинное описание",
+  }));
+}
+
+test("tasks_list: brief by default, limit 20, next continues after the slice", async () => {
+  const seen = [];
+  const { ctx } = stubCtx({ "tasks.task.list": (p) => { seen.push(p); return { result: { tasks: fakeTasks(50) }, next: 50, total: 106 }; } });
+  const c = await connectStub(ctx);
+  const r = await c.callTool({ name: "tasks_list", arguments: {} });
+  const j = JSON.parse(r.content[0].text);
+  assert.equal(j.items.length, 20);
+  assert.equal(j.next, 20);
+  assert.equal(j.total, 106);
+  assert.deepEqual(j.items[0], {
+    id: "1000", title: "Задача 0", status: "waiting", priority: "high", deadline: "2026-12-01T17:00:00+03:00",
+    responsible: "Иван Петров", creator: "Анна Смирнова", group: "Проект", tags: ["ERP", "отчёты"], changed: "2026-11-10T10:00:00+03:00",
+  });
+  assert.equal(j.items[1].priority, undefined, "normal priority is omitted");
+  assert.ok(r.content[0].text.length < 6000, `brief page of 20 stays small (${r.content[0].text.length} chars)`);
+  assert.equal(seen[0].start, undefined);
+});
+
+test("tasks_list: explicit limit and start; last page keeps Bitrix next", async () => {
+  const { ctx } = stubCtx({ "tasks.task.list": (p) => ({ result: { tasks: fakeTasks(6) }, total: 106, ...(p.start === 100 ? {} : { next: p.start + 50 }) }) });
+  const c = await connectStub(ctx);
+  const page = JSON.parse((await c.callTool({ name: "tasks_list", arguments: { limit: 5, start: 40 } })).content[0].text);
+  assert.equal(page.items.length, 5);
+  assert.equal(page.next, 45);
+  const last = JSON.parse((await c.callTool({ name: "tasks_list", arguments: { limit: 10, start: 100 } })).content[0].text);
+  assert.equal(last.items.length, 6);
+  assert.equal(last.next, undefined);
+});
+
+test("tasks_list: detail full keeps the previous compact shape", async () => {
+  const { ctx } = stubCtx({ "tasks.task.list": () => ({ result: { tasks: fakeTasks(3) } }) });
+  const c = await connectStub(ctx);
+  const j = JSON.parse((await c.callTool({ name: "tasks_list", arguments: { detail: "full" } })).content[0].text);
+  assert.equal(j.items.length, 3);
+  assert.deepEqual(j.items[0].responsible, { id: "7", name: "Иван Петров" });
+  assert.equal(j.items[0].statusName, "waiting");
+  assert.ok(j.items[0].auditorsData);
+});
+
+test("tasks_list: with_description adds the text in brief mode", async () => {
+  const { ctx } = stubCtx({ "tasks.task.list": () => ({ result: { tasks: fakeTasks(1) } }) });
+  const c = await connectStub(ctx);
+  const j = JSON.parse((await c.callTool({ name: "tasks_list", arguments: { with_description: true } })).content[0].text);
+  assert.equal(j.items[0].description, "Длинное описание");
+});
