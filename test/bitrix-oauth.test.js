@@ -140,7 +140,7 @@ test("refresh failure gives AUTH_EXPIRED", async () => {
         origin: f.origin,
         getTokens: async () => ({ accessToken: "A1", expiresAt: Date.now() - 1000 }),
         refresh: async () => {
-          throw new Error("invalid_grant");
+          throw Object.assign(new Error("revoked"), { code: "invalid_grant" });
         },
       },
     });
