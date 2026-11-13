@@ -42,12 +42,17 @@ function ok(data, note) {
   return { content: [{ type: "text", text: note ? `${note}\n${text}` : text }] };
 }
 
-function fail(e) {
+const SCOPE_HINT = {
+  stdio: "\nThe webhook lacks the permission (scope) for this method. Add it in the webhook settings on the portal.",
+  http: "\nThe server's local application on the portal lacks the permission (scope) for this method. " +
+    "A portal administrator can add it in the application's permissions: Разработчикам → Интеграции (on older box versions " +
+    "Приложения → Разработчикам) → this local application → edit → права (scopes); then users sign in again.",
+};
+
+function fail(e, mode = "stdio") {
   const msg = e instanceof BitrixError
     ? `Bitrix24 error ${e.message}` +
-      (e.code === "insufficient_scope" || e.code === "INSUFFICIENT_SCOPE"
-        ? "\nThe webhook lacks the permission (scope) for this method. Add it in the webhook settings on the portal."
-        : "")
+      (e.code === "insufficient_scope" || e.code === "INSUFFICIENT_SCOPE" ? SCOPE_HINT[mode] ?? SCOPE_HINT.stdio : "")
     : `Error: ${e.message}`;
   return { content: [{ type: "text", text: msg }], isError: true };
 }
@@ -76,7 +81,7 @@ function tool(server, ctx, name, { title, description, input = {}, write = false
       try {
         res = await handler(args ?? {});
       } catch (e) {
-        res = fail(e);
+        res = fail(e, ctx.mode);
       }
       return ctx.mode === "http" ? scrubResult(res) : res;
     }

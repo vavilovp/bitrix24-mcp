@@ -179,3 +179,16 @@ test("http mode refuses malformed or nested batch in b24_call", async () => {
   assert.notEqual(r.isError, true);
   assert.deepEqual(calls, ["batch"]);
 });
+
+test("insufficient_scope hint is mode-specific", async () => {
+  const { BitrixError } = await import("../server/bitrix.js");
+  const scopeError = () => { throw new BitrixError("crm.deal.list", "insufficient_scope", "The request requires higher privileges"); };
+  const http = await connectStub(stubCtx({ "crm.deal.list": scopeError }).ctx);
+  const h = (await http.callTool({ name: "b24_call", arguments: { method: "crm.deal.list" } })).content[0].text;
+  assert.match(h, /local application/);
+  assert.match(h, /Разработчикам/);
+  assert.doesNotMatch(h, /webhook/i);
+  const stdio = await connectStub(stubCtx({ "crm.deal.list": scopeError }, { mode: "stdio" }).ctx);
+  const s = (await stdio.callTool({ name: "b24_call", arguments: { method: "crm.deal.list" } })).content[0].text;
+  assert.match(s, /\nThe webhook lacks the permission \(scope\) for this method\. Add it in the webhook settings on the portal\.$/);
+});
