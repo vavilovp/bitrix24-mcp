@@ -365,3 +365,20 @@ test("reuse of a rotated refresh token revokes the whole grant", async (t) => {
   assert.equal(next.status, 400, "current refresh token revoked");
   assert.equal(next.body.error, "invalid_grant");
 });
+
+test("restart with a different SECRET_KEY: old bearer gets 401 and the grant is gone", async (t) => {
+  const env = await setup(t);
+  const { bearer, grantId, client, tokens } = await signedIn(env);
+  assert.equal((await rawCall(env, bearer, "b24_whoami")).status, 200);
+  env.restart({ SECRET_KEY: Buffer.alloc(32, 9).toString("base64") });
+  restFor(env.fake);
+  const r = await rawCall(env, bearer, "b24_whoami");
+  assert.equal(r.status, 401, r.text);
+  assert.match(r.headers.get("www-authenticate") ?? "", /invalid_token/);
+  assert.equal(env.store.getGrant(grantId), null);
+  assert.equal(env.store.countGrants(), 0, "unreadable grant deleted");
+  assert.equal((await refreshAt(env, client, tokens.refresh_token)).status, 400);
+  // the server keeps working: a new login succeeds with the new key
+  const again = await signedIn(env);
+  assert.equal((await rawCall(env, again.bearer, "b24_whoami")).status, 200);
+});

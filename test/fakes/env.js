@@ -15,7 +15,8 @@ export const CLIENT_SECRET = "fake-client-secret";
 
 /**
  * startEnv(t, env?) -> { fake, base, app, store, provider, logs, config, dir, restart() }.
- * restart() closes the app and its store and creates a new app on the same DATA_DIR and port.
+ * restart(envOverrides?) closes the app and its store and creates a new app on the same DATA_DIR and port
+ * (with the config reloaded from the original env plus `envOverrides`, if given).
  */
 export async function startEnv(t, env = {}) {
   const fake = await startFakePortal({ clientId: "local.test.app", clientSecret: CLIENT_SECRET });
@@ -24,7 +25,7 @@ export async function startEnv(t, env = {}) {
   await new Promise((r) => server.listen(0, "127.0.0.1", r));
   const base = `http://127.0.0.1:${server.address().port}`;
   fake.callbackUrl = `${base}/b24/callback`;
-  const config = loadConfig({
+  const configEnv = {
     PUBLIC_URL: base,
     B24_PORTAL: fake.origin,
     B24_CLIENT_ID: "local.test.app",
@@ -33,20 +34,21 @@ export async function startEnv(t, env = {}) {
     SECRET_KEY,
     DATA_DIR: dir,
     ...env,
-  });
+  };
+  const config = loadConfig(configEnv);
   const logs = [];
   // consent_id -> Cookie header of the flow that produced that consent form (used by submitConsent).
   const out = { fake, base, logs, config, dir, flowCookies: new Map() };
-  const mount = () => {
-    const app = createApp(config, { log: (line) => logs.push(line) });
+  const mount = (cfg) => {
+    const app = createApp(cfg, { log: (line) => logs.push(line) });
     server.removeAllListeners("request");
     server.on("request", app);
-    Object.assign(out, { app, store: app.locals.store, provider: app.locals.provider });
+    Object.assign(out, { app, store: app.locals.store, provider: app.locals.provider, config: cfg });
   };
-  mount();
-  out.restart = () => {
+  mount(config);
+  out.restart = (overrides = {}) => {
     out.app.locals.store.close();
-    mount();
+    mount(Object.keys(overrides).length ? loadConfig({ ...configEnv, ...overrides }) : config);
   };
   t.after(async () => {
     server.closeAllConnections();
