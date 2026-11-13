@@ -8,7 +8,8 @@ services:
     env_file: .env
     ports:
       # Only the DSM reverse proxy may reach the container (the server trusts X-Forwarded-* from it).
-      - "127.0.0.1:3000:3000"
+      # HOST_PORT (in .env, default 3000) is the port on the NAS; the container always listens on 3000.
+      - "127.0.0.1:${HOST_PORT:-3000}:3000"
     volumes:
       - bitrix24-mcp-data:/data
 
