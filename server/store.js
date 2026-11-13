@@ -22,6 +22,8 @@ CREATE TABLE IF NOT EXISTS grants (
 CREATE TABLE IF NOT EXISTS tokens (
   hash TEXT PRIMARY KEY, grant_id TEXT NOT NULL, kind TEXT NOT NULL, expires_at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS tokens_grant ON tokens(grant_id);
+CREATE TABLE IF NOT EXISTS meta (
+  key TEXT PRIMARY KEY, value TEXT NOT NULL);
 `;
 
 export function openStore(file, key) {
@@ -67,6 +69,19 @@ export function openStore(file, key) {
         hash, JSON.stringify(data), Date.now() + ttlMs);
     },
     takeCode: (hash) => take("codes", "hash", hash),
+    /** Non-consuming read of an unexpired code (for PKCE challenge lookup). */
+    getCode(hash) {
+      const row = q("SELECT data, expires_at FROM codes WHERE hash = ?").get(hash);
+      return row && row.expires_at > Date.now() ? JSON.parse(row.data) : null;
+    },
+
+    getMeta(key) {
+      const row = q("SELECT value FROM meta WHERE key = ?").get(key);
+      return row ? row.value : null;
+    },
+    setMeta(key, value) {
+      q("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, String(value));
+    },
 
     createGrant({ userId, userName, clientId, readOnlyChoice, departments, b24 }) {
       const id = crypto.randomUUID();
@@ -111,6 +126,7 @@ export function openStore(file, key) {
         JSON.stringify(departments ?? []), userName ?? null, id);
     },
     deleteGrant,
+    countGrants: () => q("SELECT COUNT(*) AS n FROM grants").get().n,
 
     saveToken(hash, { grantId, kind, expiresAt }) {
       q("INSERT OR REPLACE INTO tokens (hash, grant_id, kind, expires_at) VALUES (?, ?, ?, ?)").run(

@@ -191,3 +191,26 @@ test("cleanup removes clients unused for 30 days", (t) => {
   s.cleanup(Date.now() + 31 * 86_400_000);
   assert.equal(s.getClient("c"), null);
 });
+
+test("meta values persist; getCode peeks without consuming; countGrants", (t) => {
+  const file = tmpDb(t);
+  const s = openStore(file, keyA);
+  assert.equal(s.getMeta("member_id"), null);
+  s.setMeta("member_id", "m1");
+  s.setMeta("member_id", "m2");
+  assert.equal(s.getMeta("member_id"), "m2");
+  s.saveCode("h", { grantId: "g" }, 60_000);
+  assert.deepEqual(s.getCode("h"), { grantId: "g" });
+  assert.deepEqual(s.getCode("h"), { grantId: "g" });
+  assert.deepEqual(s.takeCode("h"), { grantId: "g" });
+  assert.equal(s.getCode("h"), null);
+  s.saveCode("old", { grantId: "g" }, -1);
+  assert.equal(s.getCode("old"), null);
+  assert.equal(s.countGrants(), 0);
+  s.createGrant(grantInput());
+  assert.equal(s.countGrants(), 1);
+  s.close();
+  const s2 = openStore(file, keyA);
+  assert.equal(s2.getMeta("member_id"), "m2");
+  s2.close();
+});
