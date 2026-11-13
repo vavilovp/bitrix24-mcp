@@ -51,3 +51,35 @@ test("loadDepartmentTree pages", async () => {
   const t = await loadDepartmentTree({ call: async () => pages[i++] });
   assert.deepEqual([...t], [[1, null], [7, 1], [12, 7]]);
 });
+
+test("scrubOutput leaves unrelated text byte-identical", () => {
+  for (const t of ["Is this ok? yes. Why?", "a=1&b=2 and x?y=1&z=2", "authority", '{"author":"X","authors":"Y"}', "https://p/x?author=1&a=2"]) {
+    assert.equal(scrubOutput(t), t);
+  }
+});
+
+test("scrubOutput tidies separators only where a parameter was removed", () => {
+  assert.equal(scrubOutput("https://p/x?auth=S"), "https://p/x");
+  assert.equal(scrubOutput("https://p/x?auth=S&a=1"), "https://p/x?a=1");
+  assert.equal(scrubOutput("https://p/x?a=1&auth=S"), "https://p/x?a=1");
+  assert.equal(scrubOutput("https://p/x?a=1&auth=S&b=2"), "https://p/x?a=1&b=2");
+  assert.equal(scrubOutput("https://p/x?a=1&access_token=S&auth=T"), "https://p/x?a=1");
+});
+
+test("scrubOutput removes JSON token keys and encoded params", () => {
+  assert.equal(scrubOutput('{"access_token":"AAA","n":1}'), '{"access_token":"[removed]","n":1}');
+  assert.equal(scrubOutput('{"refresh_token": "BBB"}'), '{"refresh_token": "[removed]"}');
+  assert.equal(scrubOutput('{"auth":"CCC","author":"X"}'), '{"auth":"[removed]","author":"X"}');
+  assert.equal(scrubOutput("https://p/x%3Fauth%3DSEC%26a%3D1"), "https://p/x%3Fa%3D1");
+  assert.equal(scrubOutput("https://p/x%3Fa%3D1%26auth%3DSEC"), "https://p/x%3Fa%3D1");
+  assert.equal(scrubOutput("https://p/x%3Fauth%3DSEC"), "https://p/x");
+  assert.ok(!scrubOutput('{"u":"https://p/?x=1\\u0026auth=SEC"}').includes("SEC"));
+});
+
+test("batch inspection helpers", async () => {
+  const { blockedInBatch, isBlockedAppMethod: b } = await import("../server/policy.js");
+  assert.equal(blockedInBatch({ cmd: { a: "crm.deal.list", b: "event.bind?x=1" } }), "event.bind");
+  assert.equal(blockedInBatch({ cmd: [" APP.option.set.json?x=1"] }), "APP.option.set");
+  assert.equal(blockedInBatch({ cmd: { a: "crm.deal.list" } }), null);
+  assert.equal(b("event.bind.json"), true);
+});

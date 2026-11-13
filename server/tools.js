@@ -5,7 +5,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { BitrixError } from "./bitrix.js";
 import { extractOffice } from "./office.js";
-import { isBlockedAppMethod, scrubOutput } from "./policy.js";
+import { isBlockedAppMethod, blockedInBatch, normalizeMethod, scrubOutput } from "./policy.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
 export const VERSION = "1.1.2";
@@ -128,8 +128,11 @@ tool(server, ctx, "b24_call", {
   readOnly: ctx.readOnly,
   destructive: !ctx.readOnly,
 }, async ({ method, params, allow_destructive }) => {
-  if (ctx.mode === "http" && isBlockedAppMethod(method)) {
-    return fail(new Error(`'${method}' is an application-level method and is not available in HTTP mode (it would affect all users of the shared application).`));
+  const blocked = ctx.mode === "http"
+    ? (isBlockedAppMethod(method) ? normalizeMethod(method) : normalizeMethod(method).toLowerCase() === "batch" ? blockedInBatch(params) : null)
+    : null;
+  if (blocked) {
+    return fail(new Error(`'${blocked}' is an application-level method and is not available in HTTP mode (it would affect all users of the shared application).`));
   }
   const destructive = DESTRUCTIVE_RE.test(method);
   if (destructive && !allow_destructive) {

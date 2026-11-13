@@ -72,7 +72,7 @@ test("stdio mode does not block app methods", async () => {
 
 test("http mode scrubs tokens", async () => {
   const items = [{ ID: 1, NAME: "a.pdf", DETAIL_URL: "https://example.test/d/1?auth=SECRET&x=1", DOWNLOAD_URL: "https://example.test/dl?auth=SECRET" }];
-  const { ctx } = stubCtx({ "disk.folder.getChildren": () => ({ result: items }), "x": () => ({ result: [] }) });
+  const { ctx } = stubCtx({ "disk.folder.getChildren": () => ({ result: items }) });
   const c = await connectStub(ctx);
   const r = await c.callTool({ name: "disk_list", arguments: { folder_id: 1 } });
   const t1 = r.content[0].text;
@@ -92,6 +92,10 @@ test("http disk_file does not write files", async () => {
   const f = { ID: 9, NAME: "r.pdf", SIZE: 100, DOWNLOAD_URL: "https://example.test/dl?auth=SECRET", DETAIL_URL: "https://example.test/d/9?auth=SECRET" };
   const { ctx } = stubCtx({ "disk.file.get": () => ({ result: f }) }, { downloadDir: dir });
   const c = await connectStub(ctx);
+  const realFetch = globalThis.fetch;
+  let fetched = 0;
+  globalThis.fetch = async () => { fetched++; throw new Error("no fetch"); };
+  try {
   const tools = (await c.listTools()).tools;
   assert.ok(!/undefined|local folder/.test(tools.find((t) => t.name === "disk_file").description));
   const r = await c.callTool({ name: "disk_file", arguments: { id: 9 } });
@@ -100,5 +104,25 @@ test("http disk_file does not write files", async () => {
   assert.ok(!text.includes("saved_to"));
   assert.ok(!text.includes("SECRET"));
   assert.deepEqual(await readdir(dir), []);
+  assert.equal(fetched, 0);
+  } finally { globalThis.fetch = realFetch; }
   await rm(dir, { recursive: true });
+});
+
+test("http mode inspects batch commands", async () => {
+  const { ctx, calls } = stubCtx({});
+  const c = await connectStub(ctx);
+  let r = await c.callTool({ name: "b24_call", arguments: { method: "batch", params: { cmd: { a: "crm.deal.list", b: "event.bind?x=1" } } } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /event\.bind/);
+  r = await c.callTool({ name: "b24_call", arguments: { method: "batch", params: { cmd: ["crm.deal.list", " APP.option.set.json?x=1"] } } });
+  assert.equal(r.isError, true);
+  assert.match(r.content[0].text, /APP\.option\.set/);
+  assert.equal(calls.length, 0);
+  r = await c.callTool({ name: "b24_call", arguments: { method: "event.bind.json" } });
+  assert.equal(r.isError, true);
+  assert.equal(calls.length, 0);
+  r = await c.callTool({ name: "b24_call", arguments: { method: "batch", params: { cmd: { a: "crm.deal.list" } } } });
+  assert.notEqual(r.isError, true);
+  assert.deepEqual(calls, ["batch"]);
 });
