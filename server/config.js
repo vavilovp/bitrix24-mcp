@@ -10,20 +10,51 @@ function required(env, name) {
   return v;
 }
 
-function httpUrl(name, value) {
+/**
+ * http(s) URL with a host. A bare host ("portal.example.com", "portal.example.com:8443/") gets "https://";
+ * any other scheme ("ftp://", "mailto:", "javascript:") and URLs with credentials are refused.
+ */
+function httpUrl(name, value, { bareHost = false } = {}) {
+  let v = String(value).trim();
+  if (bareHost && !/^[a-z][a-z0-9+.-]*:\/\//i.test(v)) {
+    // "scheme:..." without "//" is not a host (a host may only be followed by ":<port>").
+    if (/^[a-z][a-z0-9+.-]*:(?!\d)/i.test(v)) throw new Error(`${name} must be an http(s) URL, e.g. https://host.example.com`);
+    v = `https://${v}`;
+  }
   let u;
   try {
-    u = new URL(value);
+    u = new URL(v);
   } catch {
-    throw new Error(`${name} must be an absolute URL`);
+    throw new Error(`${name} must be an absolute URL, e.g. https://host.example.com`);
   }
   if (u.protocol !== "https:" && u.protocol !== "http:") throw new Error(`${name} must be an http(s) URL`);
+  if (!u.hostname || u.username || u.password) throw new Error(`${name} must be an http(s) URL with a host and no credentials`);
   return u;
 }
 
 const list = (v) => String(v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
-const idSet = (v) => new Set(list(v).map(Number).filter((n) => Number.isInteger(n) && n > 0));
-const bool = (v) => /^(1|true|yes|on)$/i.test(String(v ?? "").trim());
+
+/** Comma-separated positive integer ids. Anything else is a config error: a typo must not drop a restriction. */
+function idSet(name, v) {
+  const raw = String(v ?? "").trim();
+  if (!raw) return new Set();
+  const out = new Set();
+  for (const part of raw.split(",")) {
+    const s = part.trim();
+    if (!/^[1-9][0-9]*$/.test(s) || !Number.isSafeInteger(Number(s))) {
+      throw new Error(`${name} must be a comma-separated list of positive integer ids (got ${JSON.stringify(s.slice(0, 40))}); put comments on their own line`);
+    }
+    out.add(Number(s));
+  }
+  return out;
+}
+
+function bool(name, v) {
+  const s = String(v ?? "").trim().toLowerCase();
+  if (["1", "true", "yes", "y", "on"].includes(s)) return true;
+  if (["", "0", "false", "no", "n", "off"].includes(s)) return false;
+  throw new Error(`${name} must be one of 1/true/yes/y/on or 0/false/no/n/off`);
+}
 
 /**
  * Config: { publicUrl, portal (origin), clientId, oauthTokenUrl, memberId|null, readOnly, roUsers:Set<number>,
@@ -31,8 +62,8 @@ const bool = (v) => /^(1|true|yes|on)$/i.test(String(v ?? "").trim());
  * secretKey (Buffer) so that logging or serialising the config never prints them.
  */
 export function loadConfig(env = process.env) {
-  const publicUrl = httpUrl("PUBLIC_URL", required(env, "PUBLIC_URL"));
-  const portal = httpUrl("B24_PORTAL", required(env, "B24_PORTAL"));
+  const publicUrl = httpUrl("PUBLIC_URL", required(env, "PUBLIC_URL"), { bareHost: true });
+  const portal = httpUrl("B24_PORTAL", required(env, "B24_PORTAL"), { bareHost: true });
   const clientId = required(env, "B24_CLIENT_ID");
   const clientSecret = required(env, "B24_CLIENT_SECRET");
   const secretKey = loadKey(required(env, "SECRET_KEY"));
@@ -46,9 +77,9 @@ export function loadConfig(env = process.env) {
     clientId,
     oauthTokenUrl: tokenUrl.href,
     memberId: String(env.B24_MEMBER_ID ?? "").trim() || null,
-    readOnly: bool(env.READ_ONLY),
-    roUsers: idSet(env.READ_ONLY_USERS),
-    roDepts: idSet(env.READ_ONLY_DEPARTMENTS),
+    readOnly: bool("READ_ONLY", env.READ_ONLY),
+    roUsers: idSet("READ_ONLY_USERS", env.READ_ONLY_USERS),
+    roDepts: idSet("READ_ONLY_DEPARTMENTS", env.READ_ONLY_DEPARTMENTS),
     knownClientHosts: new Set(list(env.KNOWN_CLIENT_HOSTS ?? DEFAULT_KNOWN_HOSTS).map((h) => h.toLowerCase())),
     dataDir: String(env.DATA_DIR || "/data"),
     port,

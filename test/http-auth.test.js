@@ -274,7 +274,7 @@ test("loadConfig validates and parses", () => {
     B24_CLIENT_SECRET: "s",
     SECRET_KEY,
   };
-  const c = loadConfig({ ...base, READ_ONLY_USERS: "1, 2,,x", READ_ONLY_DEPARTMENTS: "7", KNOWN_CLIENT_HOSTS: "Claude.AI, example.org", READ_ONLY: "true" });
+  const c = loadConfig({ ...base, READ_ONLY_USERS: "1, 2", READ_ONLY_DEPARTMENTS: "7", KNOWN_CLIENT_HOSTS: "Claude.AI, example.org", READ_ONLY: "true" });
   assert.equal(c.publicUrl, "https://mcp.example.ru");
   assert.equal(c.portal, "https://portal.example.ru");
   assert.deepEqual([...c.roUsers], [1, 2]);
@@ -356,4 +356,47 @@ test("member_id pin is first-seen even when another login pins it meanwhile", as
   assert.equal(c.cb.status, 403);
   assert.doesNotMatch(c.html, /consent_id/);
   assert.equal(env.store.getMeta("member_id"), "member-other", "first pin is kept");
+});
+
+const CONFIG_BASE = {
+  PUBLIC_URL: "https://mcp.example.ru",
+  B24_PORTAL: "https://portal.example.ru",
+  B24_CLIENT_ID: "local.1",
+  B24_CLIENT_SECRET: "s",
+  SECRET_KEY,
+};
+
+test("loadConfig accepts a bare host for B24_PORTAL and PUBLIC_URL (https assumed)", () => {
+  const c = loadConfig({ ...CONFIG_BASE, B24_PORTAL: "your-portal.example.com", PUBLIC_URL: "mcp.example.com" });
+  assert.equal(c.portal, "https://your-portal.example.com");
+  assert.equal(c.publicUrl, "https://mcp.example.com");
+  const p = loadConfig({ ...CONFIG_BASE, B24_PORTAL: "portal.example.com:8443/", PUBLIC_URL: "mcp.example.com/" });
+  assert.equal(p.portal, "https://portal.example.com:8443");
+  assert.equal(p.publicUrl, "https://mcp.example.com");
+  assert.equal(loadConfig({ ...CONFIG_BASE, B24_PORTAL: "http://box.local" }).portal, "http://box.local");
+  for (const name of ["B24_PORTAL", "PUBLIC_URL"]) {
+    for (const bad of ["ftp://x.example", "javascript:alert(1)", "https://", "not a url", "mailto:a@b.example", "file:///etc/passwd"]) {
+      assert.throws(() => loadConfig({ ...CONFIG_BASE, [name]: bad }), new RegExp(name), `${name}=${bad}`);
+    }
+  }
+});
+
+test("loadConfig is strict about read-only lists and READ_ONLY", () => {
+  assert.deepEqual([...loadConfig({ ...CONFIG_BASE, READ_ONLY_USERS: " 1, 2 ,3 " }).roUsers], [1, 2, 3]);
+  assert.deepEqual([...loadConfig({ ...CONFIG_BASE, READ_ONLY_USERS: "", READ_ONLY_DEPARTMENTS: "  " }).roUsers], []);
+  for (const name of ["READ_ONLY_USERS", "READ_ONLY_DEPARTMENTS"]) {
+    for (const bad of ["1,x", "5,8        (needs the \"department\" scope)", "0", "-3", "1.5", "1,,2", "12abc", "1e3"]) {
+      assert.throws(() => loadConfig({ ...CONFIG_BASE, [name]: bad }), new RegExp(name), `${name}=${bad}`);
+    }
+  }
+  for (const v of ["1", "true", "TRUE", "yes", "Y", "y", "on", " On "]) {
+    assert.equal(loadConfig({ ...CONFIG_BASE, READ_ONLY: v }).readOnly, true, v);
+  }
+  for (const v of ["0", "false", "No", "n", "off", "", "  "]) {
+    assert.equal(loadConfig({ ...CONFIG_BASE, READ_ONLY: v }).readOnly, false, v);
+  }
+  assert.equal(loadConfig(CONFIG_BASE).readOnly, false);
+  for (const v of ["2", "maybe", "true # comment", "enabled"]) {
+    assert.throws(() => loadConfig({ ...CONFIG_BASE, READ_ONLY: v }), /READ_ONLY/, v);
+  }
 });
