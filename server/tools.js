@@ -8,7 +8,7 @@ import { extractOffice } from "./office.js";
 import { isBlockedAppMethod, blockedInBatch, normalizeMethod, scrubOutput } from "./policy.js";
 import { stripBB, attachText, messageType, isAiOverview, parseOverview, overviewSearchText, matchesQuery } from "./attach.js";
 
-export const VERSION = "1.2.0";
+export const VERSION = "1.2.1";
 const MAX_OUTPUT = 80000;
 
 const INSTRUCTIONS_TAIL =
@@ -230,6 +230,28 @@ function compactTask(t) {
   return o;
 }
 
+const PRIORITY_NAMES = { 0: "low", 2: "high" }; // 1 (normal) is omitted
+
+/** One line per task for lists: names instead of nested objects, no link/icon noise. */
+function briefTask(t, withDescription) {
+  const st = t.status ?? t.realStatus ?? t.REAL_STATUS;
+  const tags = Array.isArray(t.tags) ? t.tags : Object.values(t.tags || {});
+  return clean({
+    id: t.id,
+    title: t.title,
+    status: STATUS_NAMES[st] || st,
+    priority: PRIORITY_NAMES[t.priority],
+    deadline: t.deadline,
+    responsible: t.responsible?.name || t.responsibleId,
+    creator: t.creator?.name || t.createdBy,
+    group: t.group?.name || (t.groupId && t.groupId !== "0" ? t.groupId : undefined),
+    tags: tags.length ? tags.map((x) => (typeof x === "string" ? x : x?.title)).filter(Boolean) : undefined,
+    changed: t.changedDate,
+    closed: t.closedDate,
+    description: withDescription ? stripBB(t.description) : undefined,
+  });
+}
+
 tool(server, ctx, "tasks_list", {
   title: "List / search tasks",
   description:
@@ -248,6 +270,9 @@ tool(server, ctx, "tasks_list", {
     filter: anyObj.optional(),
     order: anyObj.optional().describe("e.g. {\"DEADLINE\":\"asc\"}. Default: ID desc"),
     with_description: z.boolean().optional(),
+    limit: z.number().int().min(1).max(50).optional().describe("Tasks per page (default 20, max 50)"),
+    detail: z.enum(["brief", "full"]).optional()
+      .describe("brief (default): id, title, status, priority, deadline, responsible, creator, group, tags, changed. full: all task fields incl. accomplices/auditors"),
     ...paging,
   },
 }, async (a) => {
@@ -267,8 +292,13 @@ tool(server, ctx, "tasks_list", {
   });
   const select = a.with_description ? [...TASK_SELECT, "DESCRIPTION"] : TASK_SELECT;
   const data = await client().call("tasks.task.list", { filter, select, order: a.order || { ID: "desc" }, start: a.start });
-  const tasks = data.result?.tasks || [];
-  return ok(clean({ items: tasks.map(compactTask), next: data.next, total: data.total }));
+  const all = data.result?.tasks || [];
+  // Bitrix pages by 50; serve a smaller page and point `next` right after it.
+  const limit = a.limit ?? 20;
+  const tasks = all.slice(0, limit);
+  const next = all.length > limit ? (a.start || 0) + limit : data.next;
+  const items = a.detail === "full" ? tasks.map(compactTask) : tasks.map((t) => briefTask(t, a.with_description));
+  return ok(clean({ items, next, total: data.total }));
 });
 
 async function taskChatId(taskId) {
