@@ -1,4 +1,7 @@
 FROM node:24-alpine
+LABEL org.opencontainers.image.source="https://github.com/vavilovp/bitrix24-mcp" \
+      org.opencontainers.image.description="Bitrix24 MCP server, remote HTTPS mode with Bitrix24 OAuth" \
+      org.opencontainers.image.licenses="MIT"
 WORKDIR /app
 ENV NODE_ENV=production DATA_DIR=/data PORT=3000
 COPY package.json package-lock.json ./

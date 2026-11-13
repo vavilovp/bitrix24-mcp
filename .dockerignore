@@ -7,3 +7,4 @@ dist
 test
 docs
 .DS_Store
+.github

@@ -3,7 +3,7 @@
 MCP-сервер для Битрикс24 (коробка или облако). Два режима:
 
 - локальный (stdio) через входящий вебхук, упаковывается в расширение `.mcpb` для Claude Desktop;
-- удалённый (HTTPS, OAuth) для команды: `node server/http.js`, каждый сотрудник входит через портал Битрикс24 и работает от своего имени. Развёртывание на Synology NAS: [docs/deploy-synology.md](docs/deploy-synology.md).
+- удалённый (HTTPS, OAuth) для команды: `node server/http.js`, каждый сотрудник входит через портал Битрикс24 и работает от своего имени. Готовый образ: `ghcr.io/vavilovp/bitrix24-mcp` (собирается GitHub Actions, тег `latest` — последняя выпущенная версия). Развёртывание на Synology NAS: [docs/deploy-synology.md](docs/deploy-synology.md).
 
 ## Структура
 
