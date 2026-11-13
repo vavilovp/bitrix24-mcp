@@ -1,0 +1,15 @@
+services:
+  bitrix24-mcp:
+    build: .
+    image: bitrix24-mcp
+    container_name: bitrix24-mcp
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      # Only the DSM reverse proxy may reach the container (the server trusts X-Forwarded-* from it).
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - bitrix24-mcp-data:/data
+
+volumes:
+  bitrix24-mcp-data:

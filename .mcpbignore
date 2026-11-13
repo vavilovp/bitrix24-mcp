@@ -11,3 +11,10 @@
 .DS_Store
 .env
 /test/
+/Dockerfile
+/docker-compose.yml
+/.dockerignore
+/.env.example
+/docs/
+/.superpowers/
+/data/

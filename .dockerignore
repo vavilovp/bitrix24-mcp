@@ -1,0 +1,9 @@
+.env
+.git
+node_modules
+dist
+*.mcpb
+.superpowers
+test
+docs
+.DS_Store
