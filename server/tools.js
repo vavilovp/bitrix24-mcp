@@ -70,7 +70,7 @@ function tool(server, ctx, name, { title, description, input = {}, write = false
     },
     async (args) => {
       if (write && ctx.readOnly) {
-        return fail(new Error("Read-only mode is on for this connection; write operations are disabled."));
+        return fail(new Error("This connection is in read-only mode; write operations are disabled."));
       }
       let res;
       try {
