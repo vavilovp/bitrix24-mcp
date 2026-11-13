@@ -10,7 +10,8 @@ export function esc(value) {
 }
 
 export function truncate(value, max = MAX_CLIENT_NAME) {
-  const chars = [...String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").trim()];
+  // Control characters become spaces; format characters (bidi overrides, zero-width) are dropped.
+  const chars = [...String(value ?? "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\p{Cf}/gu, "").trim()];
   return chars.length > max ? `${chars.slice(0, max - 1).join("")}…` : chars.join("");
 }
 

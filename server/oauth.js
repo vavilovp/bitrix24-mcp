@@ -9,7 +9,7 @@ import {
 } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { Bitrix } from "./bitrix.js";
 import { encrypt, decrypt, hashToken, randomToken } from "./crypto.js";
-import { isEligible, loadDepartmentTree, effectiveReadOnly } from "./policy.js";
+import { isEligible, loadDepartmentTree, effectiveReadOnly, userDepartments, userName } from "./policy.js";
 import { consentPage, refusalPage, errorPage } from "./pages.js";
 
 export const ACCESS_TTL_MS = 60 * 60 * 1000;
@@ -217,10 +217,6 @@ export function createProvider({ config, store, b24 }) {
   };
 }
 
-function userName(u) {
-  return [u.NAME, u.LAST_NAME].map((s) => String(s ?? "").trim()).filter(Boolean).join(" ") || `#${u.ID}`;
-}
-
 /** Portal callback and consent form. */
 export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
   const router = express.Router();
@@ -235,6 +231,13 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
     const pending = store.takePending(state);
     if (!pending || pending.stage !== "authorize") {
       return page(res, 400, errorPage("Ссылка входа устарела или уже использована."));
+    }
+    if (req.query.error !== undefined) {
+      // The user declined on the portal: hand control back to the client (RFC 6749 4.1.2.1).
+      const back = new URL(pending.redirectUri);
+      if (pending.state !== null && pending.state !== undefined) back.searchParams.set("state", pending.state);
+      back.searchParams.set("error", "access_denied");
+      return res.redirect(302, back.href);
     }
     if (typeof code !== "string" || !code) return page(res, 400, errorPage("Битрикс24 не вернул код авторизации."));
     const client = store.getClient(pending.clientId);
@@ -264,7 +267,7 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
       if (!isEligible(user)) {
         return page(res, 403, refusalPage("Доступ есть только у активных сотрудников портала."));
       }
-      const departments = (user.UF_DEPARTMENT || []).map(Number).filter(Number.isFinite);
+      const departments = userDepartments(user);
       const tree = config.roDepts.size ? await loadDepartmentTree(bitrix) : new Map();
       ({ forced } = effectiveReadOnly({
         global: config.readOnly, choice: false, userId: user.ID, departments,
@@ -275,7 +278,10 @@ export function b24Routes({ config, store, provider, b24 = provider.b24 }) {
       return page(res, 502, errorPage("Не удалось получить данные пользователя из Битрикс24."));
     }
 
-    if (!pinned) store.setMeta("member_id", tokens.memberId);
+    // Strictly first-seen: a concurrent first login from another portal may have pinned meanwhile.
+    if (!pinned && store.initMeta("member_id", tokens.memberId) !== tokens.memberId) {
+      return page(res, 403, refusalPage("Вход выполнен на другом портале Битрикс24. Этот сервер работает только со своим порталом."));
+    }
 
     const consentId = randomToken();
     const csrf = randomToken();

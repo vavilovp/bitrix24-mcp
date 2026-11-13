@@ -214,3 +214,11 @@ test("meta values persist; getCode peeks without consuming; countGrants", (t) =>
   assert.equal(s2.getMeta("member_id"), "m2");
   s2.close();
 });
+
+test("initMeta keeps the first value", (t) => {
+  const s = openStore(tmpDb(t), keyA);
+  assert.equal(s.initMeta("member_id", "m1"), "m1");
+  assert.equal(s.initMeta("member_id", "m2"), "m1");
+  assert.equal(s.getMeta("member_id"), "m1");
+  s.close();
+});

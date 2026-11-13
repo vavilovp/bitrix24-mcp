@@ -23,7 +23,8 @@ const rand = (p) => `${p}-${crypto.randomBytes(12).toString("hex")}`;
  * startFakePortal({ clientId, clientSecret }) -> {
  *   origin, tokenUrl, reqs, users, departments,
  *   callbackUrl (set by the test), nextUserId, memberId, clientEndpoint (override), issued (Bitrix tokens handed out),
- *   close() }
+ *   denyLogin (portal redirects back with error=access_denied), tokenFailure ({ status, body } answered by the
+ *   token endpoint for refresh_token requests), beforeRest(method, userId) hook, close() }
  */
 export async function startFakePortal({ clientId = "local.test.app", clientSecret = "fake-client-secret" } = {}) {
   const codes = new Map(); // bitrix code -> userId
@@ -76,9 +77,15 @@ export async function startFakePortal({ clientId = "local.test.app", clientSecre
 
       if (url.pathname === "/oauth/authorize/") {
         if (url.searchParams.get("client_id") !== clientId) return json(400, { error: "invalid_client" });
+        const to = new URL(fake.callbackUrl);
+        if (fake.denyLogin) {
+          to.searchParams.set("error", "access_denied");
+          to.searchParams.set("state", url.searchParams.get("state") ?? "");
+          res.writeHead(302, { Location: to.href });
+          return res.end();
+        }
         const code = rand("b24code");
         codes.set(code, fake.nextUserId);
-        const to = new URL(fake.callbackUrl);
         to.searchParams.set("code", code);
         to.searchParams.set("state", url.searchParams.get("state") ?? "");
         to.searchParams.set("domain", new URL(fake.origin).host);
@@ -101,6 +108,7 @@ export async function startFakePortal({ clientId = "local.test.app", clientSecre
           return json(200, issue(userId));
         }
         if (q.get("grant_type") === "refresh_token") {
+          if (fake.tokenFailure) return json(fake.tokenFailure.status, fake.tokenFailure.body);
           const userId = refresh.get(q.get("refresh_token"));
           refresh.delete(q.get("refresh_token"));
           if (userId === undefined) return json(400, { error: "invalid_grant", error_description: "Invalid refresh token" });
@@ -120,6 +128,7 @@ export async function startFakePortal({ clientId = "local.test.app", clientSecre
         const t = access.get(params.auth);
         if (!t) return json(401, { error: "invalid_token", error_description: "Unable to authorize user" });
         if (t.expired) return json(401, { error: "expired_token", error_description: "The access token provided has expired." });
+        fake.beforeRest?.(m[1], t.userId);
         if (m[1] === "user.current") return json(200, { result: fake.users[t.userId] });
         if (m[1] === "department.get") return json(200, { result: fake.departments, total: fake.departments.length });
         if (fake.rest?.[m[1]]) return json(200, fake.rest[m[1]](params, t.userId));

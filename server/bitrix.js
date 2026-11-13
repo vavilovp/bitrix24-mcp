@@ -95,6 +95,11 @@ export class Bitrix {
     await this._refreshing;
   }
 
+  /** OAuth mode: load the tokens and refresh them now if they are about to expire. No-op for webhooks. */
+  async ready() {
+    if (this.oauth) await this._currentTokens();
+  }
+
   async call(method, params = {}, attempt = 0, authRetried = false) {
     const url = `${this.base}${method}.json`;
     let body = JSON.stringify(params ?? {});

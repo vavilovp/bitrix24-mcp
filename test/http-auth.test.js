@@ -1,138 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import crypto from "node:crypto";
-import { startFakePortal } from "./fakes/portal.js";
-import { createApp } from "../server/http.js";
 import { loadConfig } from "../server/config.js";
-
-const SECRET_KEY = Buffer.alloc(32, 7).toString("base64");
-const CLIENT_SECRET = "fake-client-secret";
-
-/** Fake portal + our app on port 0. Returns helpers to walk the OAuth flow without cookies. */
-async function startEnv(t, env = {}) {
-  const fake = await startFakePortal({ clientId: "local.test.app", clientSecret: CLIENT_SECRET });
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "http-auth-"));
-  const server = http.createServer();
-  await new Promise((r) => server.listen(0, "127.0.0.1", r));
-  const base = `http://127.0.0.1:${server.address().port}`;
-  fake.callbackUrl = `${base}/b24/callback`;
-  const config = loadConfig({
-    PUBLIC_URL: base,
-    B24_PORTAL: fake.origin,
-    B24_CLIENT_ID: "local.test.app",
-    B24_CLIENT_SECRET: CLIENT_SECRET,
-    B24_OAUTH_TOKEN_URL: fake.tokenUrl,
-    SECRET_KEY,
-    DATA_DIR: dir,
-    ...env,
-  });
-  const logs = [];
-  const app = createApp(config, { log: (line) => logs.push(line) });
-  server.on("request", app);
-  t.after(async () => {
-    server.closeAllConnections();
-    await new Promise((r) => server.close(r));
-    app.locals.store.close();
-    await fake.close();
-    fs.rmSync(dir, { recursive: true, force: true });
-  });
-  return { fake, base, app, store: app.locals.store, provider: app.locals.provider, logs, config };
-}
-
-const get = (url, headers = {}) => fetch(url, { redirect: "manual", headers });
-const postForm = (url, fields, headers = {}) =>
-  fetch(url, {
-    method: "POST",
-    redirect: "manual",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers },
-    body: new URLSearchParams(fields).toString(),
-  });
-
-async function register(env, { redirectUri = "https://claude.ai/api/mcp/auth_callback", clientName = "Claude" } = {}) {
-  const res = await fetch(`${env.base}/register`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      redirect_uris: [redirectUri],
-      client_name: clientName,
-      token_endpoint_auth_method: "none",
-      grant_types: ["authorization_code", "refresh_token"],
-      response_types: ["code"],
-    }),
-  });
-  return { status: res.status, body: await res.json() };
-}
-
-function pkce() {
-  const verifier = crypto.randomBytes(32).toString("base64url");
-  const challenge = crypto.createHash("sha256").update(verifier).digest("base64url");
-  return { verifier, challenge };
-}
-
-const hidden = (html, name) => html.match(new RegExp(`name="${name}" value="([^"]*)"`))?.[1];
-
-/** register -> /authorize -> portal -> /b24/callback. Returns the callback response and flow state. */
-async function toConsent(env, { userId = 5, redirectUri, clientName } = {}) {
-  env.fake.nextUserId = userId;
-  const reg = await register(env, { redirectUri, clientName });
-  assert.equal(reg.status, 201, JSON.stringify(reg.body));
-  const client = reg.body;
-  const { verifier, challenge } = pkce();
-  const state = "client-state-" + crypto.randomBytes(4).toString("hex");
-  const authUrl = new URL(`${env.base}/authorize`);
-  authUrl.search = new URLSearchParams({
-    response_type: "code",
-    client_id: client.client_id,
-    redirect_uri: client.redirect_uris[0],
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state,
-  }).toString();
-  const a = await get(authUrl.href);
-  assert.equal(a.status, 302);
-  const portalUrl = new URL(a.headers.get("location"));
-  assert.equal(portalUrl.origin, env.fake.origin);
-  assert.equal(portalUrl.pathname, "/oauth/authorize/");
-  assert.equal(portalUrl.searchParams.get("client_id"), "local.test.app");
-  const p = await get(portalUrl.href);
-  assert.equal(p.status, 302);
-  const callbackUrl = p.headers.get("location");
-  const cb = await get(callbackUrl);
-  const html = await cb.text();
-  return { client, verifier, state, callbackUrl, cb, html };
-}
-
-async function submitConsent(env, html, extra = {}, headers = {}) {
-  const fields = { consent_id: hidden(html, "consent_id"), csrf: hidden(html, "csrf"), action: "allow", ...extra };
-  return postForm(`${env.base}/consent`, fields, headers);
-}
-
-async function exchange(env, client, code, verifier) {
-  const res = await postForm(`${env.base}/token`, {
-    grant_type: "authorization_code",
-    code,
-    code_verifier: verifier,
-    client_id: client.client_id,
-    redirect_uri: client.redirect_uris[0],
-  });
-  return { status: res.status, body: await res.json() };
-}
-
-/** Full flow to tokens. */
-async function login(env, opts = {}) {
-  const c = await toConsent(env, opts);
-  assert.equal(c.cb.status, 200, c.html);
-  const res = await submitConsent(env, c.html, opts.consent ?? {});
-  assert.equal(res.status, 302, await res.text());
-  const back = new URL(res.headers.get("location"));
-  const tokens = await exchange(env, c.client, back.searchParams.get("code"), c.verifier);
-  assert.equal(tokens.status, 200, JSON.stringify(tokens.body));
-  return { ...c, back, tokens: tokens.body };
-}
+import { truncate } from "../server/pages.js";
+import {
+  SECRET_KEY, CLIENT_SECRET, startEnv, get, postForm, register, pkce, toConsent, submitConsent, exchange, login,
+} from "./fakes/env.js";
 
 const grantCount = (store) => store.countGrants();
 
@@ -423,22 +297,63 @@ test("loadConfig validates and parses", () => {
   assert.throws(() => loadConfig({ ...base, B24_PORTAL: "not a url" }), /B24_PORTAL/);
 });
 
+/** Module specifiers of static (`import x from`, `export … from`, bare `import "x"`) and dynamic `import("x")` imports. */
+function importSpecs(src) {
+  const re = /(?:import|export)\s[^"';]*?from\s*["']([^"']+)["']|import\s*\(\s*["']([^"']+)["']\s*\)|import\s+["']([^"']+)["']/g;
+  return [...src.matchAll(re)].map((m) => m[1] ?? m[2] ?? m[3]).filter(Boolean);
+}
+
+test("import walker sees static, bare and dynamic imports", () => {
+  const src = `import a from "./a.js";\nexport { b } from './b.js';\nimport "./c.js";\nconst d = await import( "./d.js" );\nimport("node:sqlite");`;
+  assert.deepEqual(importSpecs(src), ["./a.js", "./b.js", "./c.js", "./d.js", "node:sqlite"]);
+});
+
 test("stdio entry does not import HTTP-mode modules", () => {
   const seen = new Set();
   const external = new Set();
   const walk = (file) => {
     if (seen.has(file)) return;
     seen.add(file);
-    const src = fs.readFileSync(file, "utf8");
-    for (const [, spec] of src.matchAll(/(?:import|export)\s[^"']*?from\s*["']([^"']+)["']|import\(\s*["']([^"']+)["']\s*\)/g)) {
-      if (!spec) continue;
+    for (const spec of importSpecs(fs.readFileSync(file, "utf8"))) {
       if (spec.startsWith(".")) walk(path.resolve(path.dirname(file), spec));
       else external.add(spec);
     }
   };
   walk(path.resolve("server/index.js"));
   const local = [...seen].map((f) => path.basename(f));
-  for (const m of ["http.js", "oauth.js", "config.js", "pages.js", "store.js", "crypto.js"]) assert.ok(!local.includes(m), m);
-  for (const m of external) assert.doesNotMatch(m, /^(express|express-rate-limit|node:sqlite)$|server\/auth/, m);
+  for (const m of ["http.js", "oauth.js", "config.js", "pages.js", "store.js", "crypto.js", "grants.js"]) assert.ok(!local.includes(m), m);
+  for (const m of external) assert.doesNotMatch(m, /^(express|express-rate-limit|node:sqlite)$|server\/auth|streamableHttp/i, m);
   assert.ok(local.includes("tools.js"));
+});
+
+test("portal decline redirects to the client with access_denied and state", async (t) => {
+  const env = await startEnv(t);
+  env.fake.denyLogin = true;
+  const c = await toConsent(env);
+  assert.equal(c.cb.status, 302, c.html);
+  const back = new URL(c.cb.headers.get("location"));
+  assert.equal(back.origin + back.pathname, "https://claude.ai/api/mcp/auth_callback");
+  assert.equal(back.searchParams.get("error"), "access_denied");
+  assert.equal(back.searchParams.get("state"), c.state);
+  assert.equal(back.searchParams.get("code"), null);
+  assert.equal(env.store.countGrants(), 0);
+  // the pending login is used up
+  assert.equal((await get(c.callbackUrl)).status, 400);
+});
+
+test("client name loses Unicode format characters", () => {
+  assert.equal(truncate("Cl\u202Eaude\u200B\u2066x\u2069\uFEFF"), "Claudex");
+  assert.equal(truncate("a\u0000b"), "a b");
+});
+
+test("member_id pin is first-seen even when another login pins it meanwhile", async (t) => {
+  const env = await startEnv(t);
+  // Another login (from a different portal) pins its member_id while this one is between check and pin.
+  env.fake.beforeRest = (method) => {
+    if (method === "user.current" && env.store.getMeta("member_id") === null) env.store.setMeta("member_id", "member-other");
+  };
+  const c = await toConsent(env);
+  assert.equal(c.cb.status, 403);
+  assert.doesNotMatch(c.html, /consent_id/);
+  assert.equal(env.store.getMeta("member_id"), "member-other", "first pin is kept");
 });

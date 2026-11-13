@@ -7,6 +7,16 @@ export function isEligible(user) {
   return Array.isArray(user.UF_DEPARTMENT) && user.UF_DEPARTMENT.length > 0;
 }
 
+/** Numeric department ids of a user.current / user.get record. */
+export function userDepartments(user) {
+  return (Array.isArray(user?.UF_DEPARTMENT) ? user.UF_DEPARTMENT : []).map(Number).filter(Number.isFinite);
+}
+
+/** "Name Surname" of a Bitrix24 user record, or "#ID". */
+export function userName(user) {
+  return [user?.NAME, user?.LAST_NAME].map((s) => String(s ?? "").trim()).filter(Boolean).join(" ") || `#${user?.ID}`;
+}
+
 export function departmentAncestors(deptIds, tree) {
   const out = new Set();
   for (const start of deptIds || []) {

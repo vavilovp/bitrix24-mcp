@@ -82,6 +82,11 @@ export function openStore(file, key) {
     setMeta(key, value) {
       q("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)").run(key, String(value));
     },
+    /** First-seen value: stores `value` only if the key is absent, returns whatever is stored afterwards. */
+    initMeta(key, value) {
+      q("INSERT OR IGNORE INTO meta (key, value) VALUES (?, ?)").run(key, String(value));
+      return q("SELECT value FROM meta WHERE key = ?").get(key).value;
+    },
 
     createGrant({ userId, userName, clientId, readOnlyChoice, departments, b24 }) {
       const id = crypto.randomUUID();
