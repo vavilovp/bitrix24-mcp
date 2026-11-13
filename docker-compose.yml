@@ -1,7 +1,8 @@
 services:
   bitrix24-mcp:
-    build: .
-    image: bitrix24-mcp
+    # Prebuilt image from GitHub Container Registry (amd64 + arm64).
+    # :latest follows released versions (git tags vX.Y.Z); pin a version (e.g. :1.2.0) to update deliberately.
+    image: ghcr.io/vavilovp/bitrix24-mcp:latest
     container_name: bitrix24-mcp
     restart: unless-stopped
     env_file: .env

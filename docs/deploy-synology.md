@@ -27,11 +27,12 @@
 
 ## 3. Настройка и запуск
 
-1. Скопируйте репозиторий на NAS (например, в `/volume1/docker/bitrix24-mcp`).
-2. Создайте `.env` из примера и заполните:
+Сервер поставляется готовым образом `ghcr.io/vavilovp/bitrix24-mcp` (amd64 и arm64), собирать его на NAS не нужно. На NAS нужны только два файла.
+
+1. Создайте папку проекта, например `/volume1/docker/bitrix24-mcp` (File Station → общая папка `docker`). Положите в неё [`docker-compose.yml`](../docker-compose.yml) из репозитория.
+2. Рядом создайте `.env` по образцу [`.env.example`](../.env.example) и заполните. Значение для `SECRET_KEY`:
    ```bash
-   cp .env.example .env
-   openssl rand -base64 32   # значение для SECRET_KEY
+   openssl rand -base64 32
    ```
    Обязательные переменные и их формат:
    ```ini
@@ -42,7 +43,9 @@
    SECRET_KEY=...
    ```
    `PUBLIC_URL` и `B24_PORTAL` пишутся с `https://` и без завершающего `/` (адрес без схемы сервер дополнит `https://`). Комментарии в `.env` только на отдельных строках: текст после значения становится частью значения. При ошибке в настройках контейнер не запускается и перезапускается снова; причина видна в журнале контейнера (`Configuration error: ...`). Файл `.env` никогда не коммитится. Потеря `SECRET_KEY` делает сохранённые токены нечитаемыми, и всем придётся войти заново.
-3. Container Manager → Проект → Создать: путь к папке репозитория, источник `docker-compose.yml`, запустить. Либо по SSH из папки проекта: `sudo docker compose up -d --build`.
+3. Container Manager → Проект → Создать: имя `bitrix24-mcp`, путь к папке проекта, источник «Использовать существующий docker-compose.yml», настройки Web Station не включать. Container Manager скачает образ и запустит контейнер. Либо по SSH из папки проекта: `sudo docker compose up -d`.
+
+   Тег `latest` указывает на последнюю выпущенную версию (git-тег `vX.Y.Z`). Чтобы обновляться только осознанно, замените в `docker-compose.yml` `latest` на конкретную версию, например `1.2.0`.
 
    Команды `docker` по SSH в DSM выполняются через `sudo` (обычный пользователь не имеет доступа к сокету Docker). Container Manager в DSM 7.2 ставит Compose v2, команда `docker compose`; если её нет (старый пакет Docker), используйте `sudo docker-compose` с теми же аргументами.
 4. Данные (SQLite с зашифрованными токенами) лежат в именованном томе Docker `bitrix24-mcp-data` (в проекте Compose он может называться с префиксом, например `bitrix24-mcp_bitrix24-mcp-data`). Том создаётся с правами пользователя контейнера и переживает пересборку и обновление контейнера. Посмотреть: Container Manager → Том, или по SSH `sudo docker volume ls`. Резервная копия: `sudo docker run --rm -v bitrix24-mcp_bitrix24-mcp-data:/data -v "$PWD":/backup alpine tar czf /backup/mcp-data.tgz -C /data .` (точное имя тома смотрите в `sudo docker volume ls`). Сброс (все сотрудники войдут заново): остановить проект и выполнить `sudo docker volume rm <имя тома>`; `sudo docker compose down -v` тоже удаляет том.
@@ -80,12 +83,20 @@
 
 ## 6. Обновление
 
+Новая версия публикуется автоматически: при git-теге `vX.Y.Z` GitHub Actions собирает образ и обновляет тег `latest`.
+
+По SSH из папки проекта:
+
 ```bash
-git pull
-sudo docker compose up -d --build
+sudo docker compose pull
+sudo docker compose up -d
 ```
 
-Данные в томе `bitrix24-mcp-data` сохраняются (не используйте `down -v`). В Container Manager то же самое: проект → «Действие» → «Остановить», затем «Собрать».
+В Container Manager: Проект → `bitrix24-mcp` → «Действие» → «Остановить», затем «Собрать» (скачивает свежий образ и пересоздаёт контейнер). Если в `docker-compose.yml` закреплена версия, сначала поменяйте её там.
+
+Данные в томе `bitrix24-mcp-data` сохраняются (не используйте `down -v`).
+
+Собрать образ локально из исходников (для разработки): `docker build -t ghcr.io/vavilovp/bitrix24-mcp:latest .`
 
 ## Прочие переменные
 
