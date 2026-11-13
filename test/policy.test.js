@@ -83,3 +83,29 @@ test("batch inspection helpers", async () => {
   assert.equal(blockedInBatch({ cmd: { a: "crm.deal.list" } }), null);
   assert.equal(b("event.bind.json"), true);
 });
+
+test("batch inspection fails closed", async () => {
+  const { blockedInBatch } = await import("../server/policy.js");
+  const refused = [
+    { cmd: { a: "crm.deal.list", b: "batch?cmd[b]=event.bind" } }, // nested batch
+    { cmd: { a: "BATCH.json?halt=0" } },
+    { cmd: { a: 42 } }, // non-string command
+    { cmd: { a: { method: "event.bind" } } },
+    { cmd: ["crm.deal.list", null] },
+    { cmd: "event.bind" }, // cmd as a string
+    {}, // cmd missing
+    undefined,
+    { cmd: null },
+    { cmd: { a: "/event.bind" } }, // leading slash
+    { cmd: { a: "/rest/event.bind.json" } },
+    { cmd: { a: "event%2Ebind" } }, // percent-encoding
+    { cmd: { a: "crm.deal%2elist" } },
+    { cmd: { a: "" } },
+    { cmd: { a: "event .bind" } },
+    { cmd: { a: "../event.bind" } },
+  ];
+  for (const params of refused) assert.notEqual(blockedInBatch(params), null, JSON.stringify(params));
+  assert.equal(blockedInBatch({ cmd: { a: "crm.deal.list", b: "tasks.task.get?taskId=1&select[]=ID" } }), null);
+  assert.equal(blockedInBatch({ cmd: ["user.get?ID=1", " crm.deal.get.json?id=2"] }), null);
+  assert.equal(blockedInBatch({ cmd: { a: "crm.deal.list" }, halt: 0 }), null);
+});

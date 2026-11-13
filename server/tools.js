@@ -144,11 +144,16 @@ tool(server, ctx, "b24_call", {
   readOnly: ctx.readOnly,
   destructive: !ctx.readOnly,
 }, async ({ method, params, allow_destructive }) => {
-  const blocked = ctx.mode === "http"
-    ? (isBlockedAppMethod(method) ? normalizeMethod(method) : normalizeMethod(method).toLowerCase() === "batch" ? blockedInBatch(params) : null)
-    : null;
-  if (blocked) {
-    return fail(new Error(`'${blocked}' is an application-level method and is not available in HTTP mode (it would affect all users of the shared application).`));
+  if (ctx.mode === "http") {
+    if (isBlockedAppMethod(method)) {
+      return fail(new Error(`'${normalizeMethod(method)}' is an application-level method and is not available in HTTP mode (it would affect all users of the shared application).`));
+    }
+    if (normalizeMethod(method).toLowerCase() === "batch") {
+      const refused = blockedInBatch(params);
+      if (refused) {
+        return fail(new Error(`batch refused ('${refused}'): in HTTP mode params.cmd must be an object or array of "method?query" strings with plain method names, no nested batch and no application-level methods (they would affect all users of the shared application).`));
+      }
+    }
   }
   const destructive = DESTRUCTIVE_RE.test(method);
   if (destructive && !allow_destructive) {

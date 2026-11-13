@@ -157,3 +157,25 @@ test("http mode b24_whoami description does not mention the webhook", async () =
   const w = (await c.listTools()).tools.find((x) => x.name === "b24_whoami");
   assert.doesNotMatch(w.description + (w.title || ""), /webhook/i);
 });
+
+test("http mode refuses malformed or nested batch in b24_call", async () => {
+  const { ctx, calls } = stubCtx({});
+  const c = await connectStub(ctx);
+  for (const params of [
+    { cmd: { a: "batch?cmd[b]=event.bind" } },
+    { cmd: { a: 1 } },
+    { cmd: "event.bind" },
+    {},
+    undefined,
+    { cmd: { a: "/event.bind" } },
+    { cmd: { a: "event%2Ebind" } },
+  ]) {
+    const r = await c.callTool({ name: "b24_call", arguments: { method: "batch", ...(params ? { params } : {}) } });
+    assert.equal(r.isError, true, JSON.stringify(params));
+    assert.match(r.content[0].text, /batch/i);
+  }
+  assert.equal(calls.length, 0);
+  const r = await c.callTool({ name: "b24_call", arguments: { method: "batch", params: { cmd: { a: "crm.deal.list?filter[ID]=1", b: "user.get" } } } });
+  assert.notEqual(r.isError, true);
+  assert.deepEqual(calls, ["batch"]);
+});

@@ -66,14 +66,21 @@ export function normalizeMethod(method) {
   return String(method).split("?")[0].trim().replace(/\.json$/i, "").trim();
 }
 
-/** Blocked method found in a `batch` params.cmd (object or array of "method?query" strings), or null. */
+const PLAIN_METHOD = /^[a-z0-9_.]+$/i;
+
+/**
+ * Inspection of a `batch` call for HTTP mode. Fails closed: returns null only when params.cmd is an object or
+ * array of "method?query" strings whose every method is a plain name (letters, digits, _ and .), is not `batch`
+ * and is not an application-level method. Otherwise returns what was refused: the offending method name, or a
+ * short description of the malformed part (e.g. "cmd is not an object or array").
+ */
 export function blockedInBatch(params) {
   const cmd = params?.cmd;
-  if (!cmd || typeof cmd !== "object") return null;
-  for (const c of Array.isArray(cmd) ? cmd : Object.values(cmd)) {
-    if (typeof c !== "string") continue;
+  if (!cmd || typeof cmd !== "object") return "cmd is not an object or array";
+  for (const [key, c] of Object.entries(cmd)) {
+    if (typeof c !== "string") return `cmd[${String(key).slice(0, 40)}] is not a string`;
     const m = normalizeMethod(c);
-    if (isBlockedAppMethod(m)) return m;
+    if (!PLAIN_METHOD.test(m) || m.toLowerCase() === "batch" || isBlockedAppMethod(m)) return m.slice(0, 80);
   }
   return null;
 }
