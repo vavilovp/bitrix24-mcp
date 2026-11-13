@@ -6,7 +6,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startEnv, login, SECRET_KEY, CLIENT_SECRET } from "./fakes/env.js";
+import { startEnv, login, postForm, SECRET_KEY, CLIENT_SECRET } from "./fakes/env.js";
 import { main } from "../server/http.js";
 import { openStore } from "../server/store.js";
 import { loadKey } from "../server/crypto.js";
@@ -324,4 +324,44 @@ test("http mode instructions describe the signed-in user", async (t) => {
   const text = client.getInstructions();
   assert.match(text, /signed-in user/);
   assert.doesNotMatch(text, /webhook/i);
+});
+
+async function refreshAt(env, client, refreshToken) {
+  const r = await postForm(`${env.base}/token`, { grant_type: "refresh_token", refresh_token: refreshToken, client_id: client.client_id });
+  return { status: r.status, body: await r.json() };
+}
+
+test("/revoke evicts the grant's cached Bitrix client", async (t) => {
+  const env = await setup(t);
+  const { bearer, grantId, client, tokens } = await signedIn(env);
+  assert.equal((await rawCall(env, bearer, "b24_whoami")).status, 200);
+  assert.equal(env.app.locals.grants.has(grantId), true, "client cached after a call");
+  const r = await postForm(`${env.base}/revoke`, { token: tokens.refresh_token, client_id: client.client_id });
+  assert.equal(r.status, 200);
+  assert.equal(env.app.locals.grants.has(grantId), false, "cached client evicted");
+  assert.equal(env.store.getGrant(grantId), null);
+  assert.equal((await rawCall(env, bearer, "b24_whoami")).status, 401);
+});
+
+test("reuse of a rotated refresh token revokes the whole grant", async (t) => {
+  const env = await setup(t);
+  const { bearer, grantId, client, tokens } = await signedIn(env);
+  assert.equal((await rawCall(env, bearer, "b24_whoami")).status, 200);
+  const r1 = await refreshAt(env, client, tokens.refresh_token);
+  assert.equal(r1.status, 200, JSON.stringify(r1.body));
+  assert.equal((await rawCall(env, r1.body.access_token, "b24_whoami")).status, 200);
+  assert.equal(env.app.locals.grants.has(grantId), true);
+  // a second rotation must not forget the first rotated token
+  const r2 = await refreshAt(env, client, r1.body.refresh_token);
+  assert.equal(r2.status, 200, JSON.stringify(r2.body));
+
+  const reuse = await refreshAt(env, client, tokens.refresh_token);
+  assert.equal(reuse.status, 400);
+  assert.equal(reuse.body.error, "invalid_grant");
+  assert.equal(env.store.getGrant(grantId), null, "grant deleted");
+  assert.equal(env.app.locals.grants.has(grantId), false, "cached client evicted");
+  assert.equal((await rawCall(env, r2.body.access_token, "b24_whoami")).status, 401, "current access token revoked");
+  const next = await refreshAt(env, client, r2.body.refresh_token);
+  assert.equal(next.status, 400, "current refresh token revoked");
+  assert.equal(next.body.error, "invalid_grant");
 });

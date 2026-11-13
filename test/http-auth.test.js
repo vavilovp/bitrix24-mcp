@@ -84,9 +84,6 @@ test("refresh rotates", async (t) => {
   assert.ok(r1.body.access_token && r1.body.refresh_token);
   assert.notEqual(r1.body.refresh_token, tokens.refresh_token);
   assert.ok(r1.body.expires_in <= 3600);
-  const old = await refresh(tokens.refresh_token);
-  assert.equal(old.status, 400);
-  assert.equal(old.body.error, "invalid_grant");
   await assert.rejects(env.provider.verifyAccessToken(tokens.access_token));
   const info = await env.provider.verifyAccessToken(r1.body.access_token);
   assert.ok(info.extra.grantId);
@@ -95,6 +92,10 @@ test("refresh rotates", async (t) => {
   // an access token is not a refresh token
   const wrongKind = await refresh(r2.body.access_token);
   assert.equal(wrongKind.status, 400);
+  // reusing an already-rotated refresh token fails (and revokes the grant: see test/http-mcp.test.js)
+  const old = await refresh(tokens.refresh_token);
+  assert.equal(old.status, 400);
+  assert.equal(old.body.error, "invalid_grant");
 });
 
 test("revoke removes the grant's tokens", async (t) => {

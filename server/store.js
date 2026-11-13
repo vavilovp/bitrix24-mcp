@@ -144,8 +144,10 @@ export function openStore(file, key) {
     deleteToken(hash) {
       q("DELETE FROM tokens WHERE hash = ?").run(hash);
     },
-    deleteTokensOfGrant(grantId) {
-      q("DELETE FROM tokens WHERE grant_id = ?").run(grantId);
+    /** All tokens of a grant, or only those of the given kinds (e.g. ["access", "refresh"]). */
+    deleteTokensOfGrant(grantId, kinds = null) {
+      if (!kinds) return void q("DELETE FROM tokens WHERE grant_id = ?").run(grantId);
+      for (const kind of kinds) q("DELETE FROM tokens WHERE grant_id = ? AND kind = ?").run(grantId, kind);
     },
 
     cleanup(now = Date.now()) {

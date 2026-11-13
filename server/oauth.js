@@ -128,8 +128,11 @@ export function createB24Login({ config, fetchImpl = fetch }) {
   };
 }
 
-/** SDK OAuthServerProvider backed by the store. Only SHA-256 hashes of our codes/tokens are stored. */
-export function createProvider({ config, store, b24 }) {
+/**
+ * SDK OAuthServerProvider backed by the store. Only SHA-256 hashes of our codes/tokens are stored.
+ * `grants` (createGrantClients) is used to drop a grant together with its cached Bitrix client.
+ */
+export function createProvider({ config, store, b24, grants = null }) {
   function issueTokens(grantId) {
     const now = Date.now();
     const access = randomToken();
@@ -140,6 +143,7 @@ export function createProvider({ config, store, b24 }) {
   }
 
   function dropGrant(grantId) {
+    if (grants) return grants.drop(grantId); // tokens, grant and the cached Bitrix client
     store.deleteTokensOfGrant(grantId);
     store.deleteGrant(grantId);
   }
@@ -216,6 +220,12 @@ export function createProvider({ config, store, b24 }) {
     async exchangeRefreshToken(client, refreshToken) {
       const hash = hashToken(refreshToken);
       const t = store.getToken(hash);
+      if (t && t.kind === "rotated") {
+        // Reuse of a refresh token that was already rotated (OAuth 2.1 reuse detection): the token may have
+        // been stolen, so the whole grant is revoked, the current tokens of whoever holds them included.
+        dropGrant(t.grantId);
+        throw new InvalidGrantError("Refresh token was already used; sign in again");
+      }
       if (!t || t.kind !== "refresh" || t.expiresAt <= Date.now()) throw new InvalidGrantError("Invalid or expired refresh token");
       const grant = store.getGrant(t.grantId);
       if (!grant) {
@@ -223,8 +233,10 @@ export function createProvider({ config, store, b24 }) {
         throw new InvalidGrantError("Grant no longer exists");
       }
       if (grant.clientId !== client.client_id) throw new InvalidGrantError("Refresh token was issued to another client");
-      // Rotation: the previous refresh token and access token of this grant stop working.
-      store.deleteTokensOfGrant(t.grantId);
+      // Rotation: the previous refresh token and access token of this grant stop working. The old refresh
+      // token is remembered (hash only, until its own expiry) as "rotated" so that its reuse is detected.
+      store.deleteTokensOfGrant(t.grantId, ["access", "refresh"]);
+      store.saveToken(hash, { grantId: t.grantId, kind: "rotated", expiresAt: t.expiresAt });
       store.touchClient(client.client_id);
       return issueTokens(t.grantId);
     },

@@ -60,8 +60,8 @@ export function createApp(config, deps = {}) {
     store = openStore(path.join(config.dataDir, "bitrix24-mcp.sqlite"), config.secretKey);
   }
   const b24 = deps.b24 ?? createB24Login({ config });
-  const provider = createProvider({ config, store, b24 });
   const grants = deps.grants ?? createGrantClients({ config, store, oauthTokenUrl: config.oauthTokenUrl });
+  const provider = createProvider({ config, store, b24, grants });
   const resourceServerUrl = new URL("/mcp", config.publicUrl);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
 
