@@ -3,15 +3,14 @@ services:
     # Prebuilt image from GitHub Container Registry (amd64 + arm64).
     # :latest follows released versions (git tags vX.Y.Z); pin a version (e.g. :1.2.0) to update deliberately.
     image: ghcr.io/vavilovp/bitrix24-mcp:latest
-    # Pull on every "up"/Build: otherwise a cached :latest is reused and updates never arrive
-    # (Container Manager's Registry search covers Docker Hub only, not ghcr.io).
+    # Pull on every "up": otherwise a cached :latest is reused and updates never arrive.
     pull_policy: always
     container_name: bitrix24-mcp
     restart: unless-stopped
     env_file: .env
     ports:
-      # Only the DSM reverse proxy may reach the container (the server trusts X-Forwarded-* from it).
-      # HOST_PORT (in .env, default 3000) is the port on the NAS; the container always listens on 3000.
+      # Only a reverse proxy on the same host may reach the container (the server trusts X-Forwarded-* from it).
+      # HOST_PORT (in .env, default 3000) is the port on the host; the container always listens on 3000.
       - "127.0.0.1:${HOST_PORT:-3000}:3000"
     volumes:
       - bitrix24-mcp-data:/data
