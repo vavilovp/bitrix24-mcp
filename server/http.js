@@ -67,7 +67,7 @@ export function createApp(config, deps = {}) {
 
   const app = express();
   app.disable("x-powered-by");
-  app.set("trust proxy", 1); // one reverse proxy (Synology) in front
+  app.set("trust proxy", 1); // exactly one reverse proxy in front
   app.locals.store = store;
   app.locals.provider = provider;
   app.locals.config = config;
